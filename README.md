@@ -13,6 +13,7 @@ Open `index.html` in a browser. It has no build step and needs no server.
 - **Rankings.** A stand-in for the selection committee that blends a résumé score (strength of record) with a power rating. A slider controls how much weight each one gets.
 - **Playoff.** The 12-team field: the five highest-ranked conference champions plus seven at-large teams, seeded straight by ranking. Seeds 1–4 get byes. Pick your way to a national champion.
 - **Big games.** Pick a team and see the 25 or 50 open games that swing its playoff or first-round-bye chances the most, its own games and everyone else's, with its chances if each side wins. Every game card also shows each team's playoff chance with a win and with a loss.
+- **Simulator.** Play the rest of the season one week at a time or all at once. Each game is a weighted coin flip on its win chance, so a 50/50 game goes either way equally often. Re-roll as often as you like; your own picks stay locked. Each run shows the upsets versus how many were expected, plus a fairness check that replays every game 2,000 times.
 - **Odds.** 4,000 simulated seasons that keep your picks fixed. Shows each team's chances of reaching its title game, winning its conference, making the playoff, earning a bye and winning it all.
 
 Picks are saved in your browser.

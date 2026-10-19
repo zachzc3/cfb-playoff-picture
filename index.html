@@ -54,6 +54,7 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .btn { border: 1px solid var(--line); background: var(--surface); padding: 7px 13px; border-radius: 6px; font-weight: 600; font-size: 14px; cursor: pointer; }
 .btn:hover { border-color: var(--turf); }
 .btn.primary { background: var(--turf); border-color: var(--turf); color: var(--bg); }
+.btn:disabled { opacity: .45; cursor: default; border-color: var(--line); }
 .hint { color: var(--muted); font-size: 13px; }
 main { padding-block: 10px 60px; }
 h2 { font-family: var(--data); font-size: 22px; font-weight: 700; letter-spacing: .02em; margin: 8px 0 4px; text-wrap: balance; }
@@ -87,6 +88,19 @@ select, input[type="search"] { font: inherit; font-size: 14px; padding: 6px 9px;
 .side.picked { background: var(--turf-soft); border-color: var(--turf); box-shadow: inset 3px 0 0 var(--turf); }
 .side.picked .p { color: var(--turf); font-weight: 700; }
 .side:disabled { cursor: default; }
+.side.picked.sim { border-style: dashed; box-shadow: none; }
+.legend i.pk.sm { border-style: dashed; box-shadow: none; }
+/* simulator */
+.sim-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.tile b { display: block; font-family: var(--data); font-size: 28px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile span { font-size: 13px; color: var(--muted); }
+.ups { display: grid; gap: 6px; padding: 0; margin: 0; list-style: none; }
+.ups li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.ups .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ups .odds { font-family: var(--data); font-weight: 700; color: var(--pylon); font-variant-numeric: tabular-nums; }
+.dice td.n b { font-size: 16px; }
 .side .imp { grid-column: 2 / -1; margin-top: -5px; font-family: var(--data); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .side .imp b { color: var(--ink); font-weight: 600; }
 /* big games */
@@ -428,6 +442,61 @@ function playBracket(seeds, mode, rng) {
   return games;
 }
 
+// ---------- simulator ----------
+// Plays open games as weighted coin flips: a team with a 70% win chance wins about 7 of every 10 flips.
+// Simulated results are saved like picks but flagged, so they can be re-rolled without touching the user's own picks.
+['sim', 'simCcg', 'simCfp'].forEach(k => { if (!S[k] || typeof S[k] !== 'object') S[k] = {}; });
+const BRACKET_ORDER = ['R1A', 'R1B', 'R1C', 'R1D', 'QF1', 'QF2', 'QF3', 'QF4', 'SF1', 'SF2', 'F'];
+const flip = p => Math.random() < p;
+const openGames = () => GAMES.filter(g => !g.final && !S.picks[g.id]);
+function simGames(list) {
+  const log = [];
+  for (const g of list) {
+    const p = pHome(g), hw = flip(p);
+    S.picks[g.id] = hw ? 'home' : 'away'; S.sim[g.id] = 1;
+    log.push({ id: g.id, p: hw ? p : 1 - p }); // p = chance the winner had going in
+  }
+  return log;
+}
+function clearSimPost() {
+  for (const c in S.simCcg) delete S.ccg[c];
+  for (const k in S.simCfp) delete S.cfp[k];
+  S.simCcg = {}; S.simCfp = {};
+}
+function simPost() {
+  // Title games and bracket, keeping any the user picked themselves
+  clearSimPost(); project();
+  const post = [];
+  for (const c in P.ccg) {
+    const m = P.ccg[c];
+    if (S.ccg[c] === m.a || S.ccg[c] === m.b) continue;
+    const p = pWin(m.a, m.b), aw = flip(p);
+    S.ccg[c] = aw ? m.a : m.b; S.simCcg[c] = 1; post.push({ a: m.a, b: m.b, win: S.ccg[c], p: aw ? p : 1 - p, label: CONF[c].name.replace(' Conference', '') + ' title' });
+  }
+  project();
+  for (const k of BRACKET_ORDER) {
+    const g = P.bracket[k];
+    if (!(S.cfp[k] === g.a || S.cfp[k] === g.b)) {
+      const p = pWin(g.a, g.b, g.home ? HFA : 0), aw = flip(p);
+      S.cfp[k] = aw ? g.a : g.b; S.simCfp[k] = 1; post.push({ a: g.a, b: g.b, win: S.cfp[k], p: aw ? p : 1 - p, label: g.label });
+    }
+    project();
+  }
+  return post;
+}
+function simWeek() {
+  const open = openGames();
+  if (!open.length) { S.lastSim = { label: 'Postseason', games: [], post: simPost() }; return; }
+  const wk = open[0].week;
+  clearSimPost();
+  S.lastSim = { label: 'Week ' + wk, games: simGames(open.filter(g => g.week === wk)), post: [] };
+}
+function simRest(label) { S.lastSim = { label, games: simGames(openGames()), post: [] }; S.lastSim.post = simPost(); }
+function clearSim() {
+  for (const id in S.sim) delete S.picks[id];
+  S.sim = {}; clearSimPost(); S.lastSim = null;
+}
+
 // ---------- monte carlo ----------
 // Each simulated season also records who won every open game (`out`) and every team's seed (`seed`, 0 = out),
 // so the page can compare a team's chances in the seasons where a game went one way against the other.
@@ -456,7 +525,7 @@ function runOdds(N = 4000) {
     }
     O.done = done;
     if (done >= N) { O.running = false; render(); }
-    else if (S.tab === 'odds' || S.tab === 'impact') render(); else renderTally();
+    else if (S.tab === 'odds' || S.tab === 'impact' || S.tab === 'sim') render(); else renderTally();
     if (done < N) setTimeout(step, 0);
   };
   setTimeout(step, 0);
@@ -510,7 +579,7 @@ const sgn = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(1);
 let P; // deterministic projection from picks + favorites
 function project() { P = runSeason('pick', null, S.w); }
 
-const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['impact', 'Big games'], ['odds', 'Odds']];
+const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['impact', 'Big games'], ['sim', 'Simulator'], ['odds', 'Odds']];
 function renderTabs() {
   document.getElementById('tabs').innerHTML = TABS.map(([k, l]) =>
     `<button class="tab" role="tab" type="button" data-act="tab" data-v="${k}" aria-selected="${S.tab === k}">${l}</button>`).join('');
@@ -548,7 +617,7 @@ function sideBtn(g, side) {
     right = `<span class="v">${side === 'home' ? g.hs : g.as}</span>`;
   } else {
     const pick = S.picks[g.id];
-    if (pick === side) cls += ' picked'; else if (!pick && p >= 0.5) cls += ' proj';
+    if (pick === side) cls += S.sim[g.id] ? ' picked sim' : ' picked'; else if (!pick && p >= 0.5) cls += ' proj';
     right = `<span class="p">${fmtPct(p)}</span>`;
     right += impactLine(g, id, side);
   }
@@ -634,7 +703,7 @@ function renderPicks() {
     <div class="filters"><div class="weeks" role="group" aria-label="Week">${wkBtns}</div>
       <select id="f-conf" aria-label="Conference">${opts}</select>
       <input id="f-q" type="search" placeholder="Find a team's schedule" value="${esc(S.q)}" aria-label="Team search"></div>
-    <div class="legend"><span><i></i>Projected winner (favorite)</span><span><i class="pk"></i>Your pick</span></div>
+    <div class="legend"><span><i></i>Projected winner (favorite)</span><span><i class="pk"></i>Your pick</span><span><i class="pk sm"></i>Simulated result</span></div>
     <div class="games">${rows || '<p class="hint">No games match those filters.</p>'}</div>`;
 }
 
@@ -765,6 +834,77 @@ function renderImpact() {
     <p class="note">Estimates from ${ODDS.done.toLocaleString()} simulated seasons. Games are ranked by how confident the swing is, not just its size, so a big upset that only came up a few times can't jump the list on luck, and games whose effect could be noise are left off.</p>`;
 }
 
+function renderSim() {
+  const open = openGames(), nSim = Object.keys(S.sim).length, nMine = Object.keys(S.picks).length - nSim;
+  const L = S.lastSim;
+  const nextLabel = open.length ? `Sim week ${open[0].week}` : 'Sim the postseason';
+  let recap = '';
+  if (L) {
+    const games = L.games.filter(x => S.sim[x.id]); // drop any the user has since overridden
+    const ups = games.filter(x => x.p < 0.5).sort((a, b) => a.p - b.p);
+    const expUps = games.reduce((s, x) => s + Math.min(x.p, 1 - x.p), 0);
+    const line = (winner, loser, p, where) => `<li>${chip(winner)}<span class="who"><b>${esc(T[winner] ? T[winner].name : winner)}</b> beat ${esc(T[loser] ? T[loser].name : loser)} <span class="hint">${esc(where)}</span></span><span class="odds" title="Winner's chance going in">${fmtPct(p)}</span></li>`;
+    const upList = ups.slice(0, 10).map(x => {
+      const g = G[x.id], hw = S.picks[x.id] === 'home';
+      const w = hw ? g.home : g.away, l = hw ? g.away : g.home;
+      return line(w, T[l] ? l : (g.fcsName || 'FCS opponent'), x.p, 'Week ' + g.week);
+    }).join('');
+    const postUps = (L.post || []).filter(x => x.p < 0.5).map(x => line(x.win, x.win === x.a ? x.b : x.a, x.p, x.label)).join('');
+    const champ = P.bracket.F.win;
+    const post = L.post && L.post.length ? `
+      <h2>How the postseason played out</h2>
+      <div class="lists">
+        <section class="card"><h3>Conference champions</h3><ul>${Object.entries(P.champs).map(([c, id]) => `<li>${esc(T[id].name)} <span class="hint">${esc(CONF[c].abbr.toUpperCase())}</span></li>`).join('')}</ul></section>
+        <section class="card"><h3>Playoff field</h3><ol>${P.seeds.map(id => `<li>${esc(T[id].name)} <span class="hint">${recStr(P.rec[id])}</span></li>`).join('')}</ol></section>
+        <section class="card"><h3>Postseason upsets</h3>${postUps ? `<ul class="ups">${postUps}</ul>` : '<p class="hint">The favorite won every title game and playoff game.</p>'}</section>
+      </div>
+      <div class="champ">${chip(champ)}<div><div class="k">Simulated national champion</div><div class="t">${esc(T[champ].name)} ${esc(T[champ].mascot)}</div></div></div>` : '';
+    recap = `<h2>Last run: ${esc(L.label)}</h2>
+      <div class="tiles">
+        <div class="tile"><b>${games.length}</b><span>games played</span></div>
+        <div class="tile"><b>${ups.length}</b><span>upsets, about ${expUps.toFixed(1)} expected</span></div>
+        <div class="tile"><b>${games.length ? Math.round((1 - ups.length / games.length) * 100) + '%' : '–'}</b><span>won by the favorite</span></div>
+        <div class="tile"><b>${ups.length ? fmtPct(ups[0].p) : '–'}</b><span>biggest upset's odds</span></div>
+      </div>
+      ${upList ? `<h3>Biggest upsets</h3><ul class="ups">${upList}</ul>` : games.length ? '<p class="hint">No upsets. Every favorite won.</p>' : ''}
+      ${post}`;
+  }
+  return `<h2>Season simulator</h2>
+    <p class="lede">Each game is a weighted coin flip using the ${esc(SOURCES[S.src].label)} win chance. A 50/50 game goes either way equally often, and a team with a 70% chance wins about 7 of every 10 flips. Results show on every tab with a dashed outline. Your own picks are never changed, and re-rolling only replaces simulated results.</p>
+    <div class="sim-controls">
+      <button class="btn primary" type="button" data-act="sim-week">${nextLabel}</button>
+      <button class="btn" type="button" data-act="sim-rest">Sim the rest of the season</button>
+      <button class="btn" type="button" data-act="sim-reroll"${nSim ? '' : ' disabled'}>Re-roll the season</button>
+      <button class="btn" type="button" data-act="sim-clear"${nSim ? '' : ' disabled'}>Clear simulated results</button>
+    </div>
+    <p class="hint">${nSim} games simulated · ${nMine} your picks · ${open.length} still open</p>
+    ${recap}
+    ${renderDice()}`;
+}
+// Fairness check: replay every unplayed regular-season game 2,000 times with the simulator's own coin, grouped
+// by how big a favorite the favorite was. Cached per rating source so the numbers don't jump on every render.
+let DICE = null;
+const DICE_FLIPS = 2000;
+function renderDice() {
+  if (!DICE || DICE.src !== S.src) {
+    const bins = [[0.5, 0.55, 'Coin flips (50–55%)'], [0.55, 0.65, '55–65%'], [0.65, 0.75, '65–75%'], [0.75, 0.85, '75–85%'], [0.85, 0.95, '85–95%'], [0.95, 1.01, '95% and up']]
+      .map(([lo, hi, label]) => ({ lo, hi, label, games: 0, flips: 0, exp: 0, won: 0 }));
+    for (const g of GAMES) {
+      if (g.final) continue;
+      const ph = pHome(g), pf = Math.max(ph, 1 - ph);
+      const b = bins.find(b => pf >= b.lo && pf < b.hi);
+      let won = 0; for (let k = 0; k < DICE_FLIPS; k++) if (flip(pf)) won++;
+      b.games++; b.flips += DICE_FLIPS; b.exp += pf * DICE_FLIPS; b.won += won;
+    }
+    DICE = { src: S.src, bins };
+  }
+  const rows = DICE.bins.filter(b => b.games).map(b => `<tr><td>${b.label}</td><td class="n">${b.games}</td><td class="n">${b.flips.toLocaleString()}</td>
+    <td class="n">${(b.exp / b.flips * 100).toFixed(1)}%</td><td class="n"><b>${(b.won / b.flips * 100).toFixed(1)}%</b></td></tr>`).join('');
+  return `<h2>Check the dice</h2>
+    <p class="lede">Proof the coin is fair. Every unplayed game was replayed ${DICE_FLIPS.toLocaleString()} times with the same coin flip the simulator uses, then grouped by how big a favorite the favorite was. The favorite's actual win rate should match its expected rate in every row.</p>
+    <div class="scroll"><table class="dice"><thead><tr><th>Favorite's chance</th><th class="n">Games</th><th class="n">Flips</th><th class="n">Expected</th><th class="n">Actual</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 function renderOdds() {
   if (!ODDS) return '<p class="hint">Starting simulations…</p>';
   const { cnt, done, N } = ODDS, n = Math.max(done, 1);
@@ -793,7 +933,7 @@ function render() {
   document.getElementById('f-src').value = S.src;
   const dlg = document.getElementById('sheet');
   if (dlg.open && T[S.team]) { const y = dlg.scrollTop; dlg.innerHTML = renderSheet(); dlg.scrollTop = y; }
-  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, impact: renderImpact, odds: renderOdds }[S.tab] || renderPicks;
+  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, impact: renderImpact, sim: renderSim, odds: renderOdds }[S.tab] || renderPicks;
   const main = document.getElementById('main');
   const focusId = document.activeElement && document.activeElement.id, selStart = document.activeElement && document.activeElement.selectionStart;
   main.innerHTML = f() + NOTE;
@@ -812,23 +952,17 @@ document.addEventListener('click', e => {
   if (a === 'imp-open') { S.impTeam = b.dataset.v; S.tab = 'impact'; document.getElementById('sheet').close(); save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'tab') { S.tab = b.dataset.v; save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'week') { S.week = +b.dataset.v; S.q = ''; save(); render(); return; }
-  if (a === 'pick') { const g = b.dataset.g, s = b.dataset.s; S.picks[g] === s ? delete S.picks[g] : S.picks[g] = s; return changed(); }
-  if (a === 'ccg') { const c = b.dataset.c, v = b.dataset.v; S.ccg[c] === v ? delete S.ccg[c] : S.ccg[c] = v; return changed(); }
-  if (a === 'cfp') { const g = b.dataset.g, v = b.dataset.v; S.cfp[g] === v ? delete S.cfp[g] : S.cfp[g] = v; return changed(); }
-  if (a === 'clear') { S.picks = {}; S.ccg = {}; S.cfp = {}; return changed(); }
+  if (a === 'pick') { const g = b.dataset.g, s = b.dataset.s; delete S.sim[g]; S.picks[g] === s ? delete S.picks[g] : S.picks[g] = s; return changed(); }
+  if (a === 'ccg') { const c = b.dataset.c, v = b.dataset.v; delete S.simCcg[c]; S.ccg[c] === v ? delete S.ccg[c] : S.ccg[c] = v; return changed(); }
+  if (a === 'cfp') { const g = b.dataset.g, v = b.dataset.v; delete S.simCfp[g]; S.cfp[g] === v ? delete S.cfp[g] : S.cfp[g] = v; return changed(); }
+  if (a === 'clear') { S.picks = {}; S.ccg = {}; S.cfp = {}; S.sim = {}; S.simCcg = {}; S.simCfp = {}; S.lastSim = null; return changed(); }
   if (a === 'rerun') { runOdds(); render(); return; }
-  if (a === 'random') {
-    // Fill every open game with a weighted random result, then lock in the resulting title games and bracket.
-    for (const g of GAMES) if (!g.final && !S.picks[g.id] && T[g.home] && T[g.away]) S.picks[g.id] = Math.random() < pHome(g) ? 'home' : 'away';
-    for (const g of GAMES) if (!g.final && !S.picks[g.id]) S.picks[g.id] = pHome(g) >= 0.5 ? 'home' : 'away';
-    S.ccg = {}; S.cfp = {}; project();
-    for (const c in P.ccg) { const m = P.ccg[c]; S.ccg[c] = Math.random() < pWin(m.a, m.b) ? m.a : m.b; }
-    project();
-    for (const k of ['R1A', 'R1B', 'R1C', 'R1D', 'QF1', 'QF2', 'QF3', 'QF4', 'SF1', 'SF2', 'F']) {
-      const g = P.bracket[k]; S.cfp[k] = Math.random() < pWin(g.a, g.b, g.home ? HFA : 0) ? g.a : g.b; project();
-    }
-    return changed();
-  }
+  if (a === 'random' || a === 'sim-rest') { simRest('Rest of the season'); return changed(); }
+  if (a === 'sim-week') { simWeek(); return changed(); }
+  if (a === 'sim-reroll') { clearSim(); simRest('Re-rolled season'); return changed(); }
+  if (a === 'sim-clear') { clearSim(); return changed(); }
+  if (a === 'sim-open') { S.tab = 'sim'; save(); render(); window.scrollTo({ top: 0 }); return; }
+  if (a === 'dice') { S.diceOpen = !S.diceOpen; save(); render(); return; }
 });
 const sheetEl = document.getElementById('sheet');
 sheetEl.addEventListener('click', e => { if (e.target === sheetEl) sheetEl.close(); }); // backdrop
