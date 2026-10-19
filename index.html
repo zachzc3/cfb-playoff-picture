@@ -87,6 +87,28 @@ select, input[type="search"] { font: inherit; font-size: 14px; padding: 6px 9px;
 .side.picked { background: var(--turf-soft); border-color: var(--turf); box-shadow: inset 3px 0 0 var(--turf); }
 .side.picked .p { color: var(--turf); font-weight: 700; }
 .side:disabled { cursor: default; }
+.side .imp { grid-column: 2 / -1; margin-top: -5px; font-family: var(--data); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.side .imp b { color: var(--ink); font-weight: 600; }
+/* big games */
+.imp-head { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+.imp-head .now { font-family: var(--data); font-size: 15px; }
+.imp-head .now b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 6px 11px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.imp-list { display: grid; gap: 10px; }
+.imp-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) minmax(0, 300px); gap: 12px; align-items: center; }
+.imp-row .n { font-family: var(--data); font-weight: 700; color: var(--muted); text-align: right; font-size: 15px; }
+.imp-row .game { margin: 0; }
+.swing { display: grid; gap: 4px; font-family: var(--data); font-size: 14px; font-variant-numeric: tabular-nums; }
+.swing .out { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.swing .out span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.swing .out b { font-size: 16px; }
+.swing .out.up b { color: var(--win); }
+.swing .out.down b { color: var(--loss); }
+.swing .delta { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--pylon); font-weight: 700; }
+.own { box-shadow: inset 3px 0 0 var(--pylon); }
+@media (max-width: 640px) { .imp-row { grid-template-columns: 22px minmax(0, 1fr); } .imp-row .swing { grid-column: 2; } }
 .side.lost { opacity: .55; }
 .side.won .v { color: var(--win); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
@@ -318,13 +340,14 @@ function sortConf(ids, rec, log) {
   }
   return out;
 }
-function runSeason(mode, rng, w) {
+function runSeason(mode, rng, w, trace) {
   const rec = {}; FBS.forEach(i => rec[i] = { w: 0, l: 0, cw: 0, cl: 0, res: [] });
   for (const g of GAMES) {
     let hw;
     if (g.final) hw = g.hs > g.as;
     else if (S.picks[g.id]) hw = S.picks[g.id] === 'home';
     else hw = mode === 'sim' ? rng() < pHome(g) : pHome(g) >= 0.5;
+    if (trace && ODDS.openIdx[g.id] !== undefined) trace[ODDS.openIdx[g.id]] = hw ? 1 : 0;
     const isConf = g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf && T[g.home].conf !== IND;
     addResult(rec, g, hw, isConf);
   }
@@ -406,29 +429,70 @@ function playBracket(seeds, mode, rng) {
 }
 
 // ---------- monte carlo ----------
+// Each simulated season also records who won every open game (`out`) and every team's seed (`seed`, 0 = out),
+// so the page can compare a team's chances in the seasons where a game went one way against the other.
+const TI = Object.fromEntries(FBS.map((id, i) => [id, i]));
 let ODDS = null, oddsJob = 0;
-function runOdds(N = 2000) {
+function runOdds(N = 4000) {
   const job = ++oddsJob, cnt = {};
   FBS.forEach(i => cnt[i] = { ccg: 0, conf: 0, cfp: 0, bye: 0, title: 0, w: 0 });
   let seed = 12345; const rng = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
   let done = 0;
-  ODDS = { running: true, done: 0, N, cnt };
+  const open = GAMES.filter(g => !g.final && !S.picks[g.id]);
+  const G = open.length, NT = FBS.length;
+  ODDS = { running: true, done: 0, N, cnt, open, G, openIdx: Object.fromEntries(open.map((g, j) => [g.id, j])),
+    out: new Uint8Array(N * G), seed: new Uint8Array(N * NT), cache: new Map() };
+  const O = ODDS;
   const step = () => {
     if (job !== oddsJob) return;
-    for (let k = 0; k < 100 && done < N; k++, done++) {
-      const r = runSeason('sim', rng, S.w);
+    const t0 = performance.now();
+    while (done < N && performance.now() - t0 < 40) {
+      const r = runSeason('sim', rng, S.w, O.out.subarray(done * G, (done + 1) * G));
       for (const c in r.ccg) { cnt[r.ccg[c].a].ccg++; cnt[r.ccg[c].b].ccg++; cnt[r.ccg[c].win].conf++; }
-      r.seeds.forEach((id, i) => { cnt[id].cfp++; if (i < 4) cnt[id].bye++; });
+      r.seeds.forEach((id, i) => { cnt[id].cfp++; if (i < 4) cnt[id].bye++; O.seed[done * NT + TI[id]] = i + 1; });
       cnt[r.bracket.F.win].title++;
       FBS.forEach(i => cnt[i].w += r.rec[i].w);
+      done++;
     }
-    ODDS.done = done;
-    if (done >= N) ODDS.running = false;
-    if (S.tab === 'odds') render(); else renderTally();
+    O.done = done;
+    if (done >= N) { O.running = false; render(); }
+    else if (S.tab === 'odds' || S.tab === 'impact') render(); else renderTally();
     if (done < N) setTimeout(step, 0);
   };
   setTimeout(step, 0);
 }
+const IMPACT_MIN = 40; // ignore an outcome that showed up in fewer simulated seasons than this
+const inMetric = (s, metric) => metric === 'bye' ? s >= 1 && s <= 4 : s > 0;
+// Chance (by metric) for a team when open game j goes to the home team and when it goes to the away team.
+function condOdds(id, j, metric) {
+  const O = ODDS, key = id + ':' + j + ':' + metric;
+  if (O.cache.has(key)) return O.cache.get(key);
+  const NT = FBS.length, ti = TI[id], n = O.done;
+  let nH = 0, inH = 0, inA = 0;
+  for (let k = 0; k < n; k++) {
+    const h = O.out[k * O.G + j], hit = inMetric(O.seed[k * NT + ti], metric);
+    if (h) { nH++; if (hit) inH++; } else if (hit) inA++;
+  }
+  const nA = n - nH;
+  const res = { home: nH ? inH / nH : null, away: nA ? inA / nA : null, nH, nA, ok: nH >= IMPACT_MIN && nA >= IMPACT_MIN };
+  if (!O.running) O.cache.set(key, res);
+  return res;
+}
+function topImpact(id, metric, limit) {
+  const rows = [];
+  for (let j = 0; j < ODDS.G; j++) {
+    const c = condOdds(id, j, metric);
+    if (!c.ok) continue;
+    // Rank by the swing minus two standard errors, so a lopsided game whose upset only came up in a
+    // few dozen simulated seasons can't float to the top on noise.
+    const p = (c.home * c.nH + c.away * c.nA) / (c.nH + c.nA);
+    const se = Math.sqrt(Math.max(p * (1 - p), 0.0025) * (1 / c.nH + 1 / c.nA));
+    const swing = Math.abs(c.home - c.away), sure = swing - 2 * se;
+    if (sure > 0.01) rows.push({ g: ODDS.open[j], j, ...c, swing, sure });
+  }
+  return rows.sort((a, b) => b.sure - a.sure).slice(0, limit);
+}
+const oddsReady = () => ODDS && !ODDS.stale && ODDS.done >= Math.min(1000, ODDS.N);
 let oddsTimer;
 function scheduleOdds() { clearTimeout(oddsTimer); if (ODDS) ODDS.stale = true; oddsTimer = setTimeout(() => runOdds(), 700); }
 
@@ -446,7 +510,7 @@ const sgn = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(1);
 let P; // deterministic projection from picks + favorites
 function project() { P = runSeason('pick', null, S.w); }
 
-const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['odds', 'Odds']];
+const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['impact', 'Big games'], ['odds', 'Odds']];
 function renderTabs() {
   document.getElementById('tabs').innerHTML = TABS.map(([k, l]) =>
     `<button class="tab" role="tab" type="button" data-act="tab" data-v="${k}" aria-selected="${S.tab === k}">${l}</button>`).join('');
@@ -462,6 +526,15 @@ function renderTally() {
   document.getElementById('pickcount').textContent = n ? `Unpicked games go to the favorite.` : `Every unplayed game is set to the favorite. Tap a team to pick an upset.`;
 }
 
+// "Playoff 92% with win · 61% with loss" under a team, from the simulations
+function impactLine(g, id, side) {
+  if (!T[id] || !oddsReady()) return '';
+  const j = ODDS.openIdx[g.id]; if (j === undefined) return '';
+  const c = condOdds(id, j, 'cfp'); if (!c.ok) return '';
+  const win = side === 'home' ? c.home : c.away, loss = side === 'home' ? c.away : c.home;
+  if (Math.max(win, loss) < 0.005) return '';
+  return `<span class="imp">Playoff <b>${fmtPct(win)}</b> with win · <b>${fmtPct(loss)}</b> with loss</span>`;
+}
 function sideBtn(g, side) {
   const id = g[side], other = g[side === 'home' ? 'away' : 'home'];
   const p = side === 'home' ? pHome(g) : 1 - pHome(g);
@@ -477,6 +550,7 @@ function sideBtn(g, side) {
     const pick = S.picks[g.id];
     if (pick === side) cls += ' picked'; else if (!pick && p >= 0.5) cls += ' proj';
     right = `<span class="p">${fmtPct(p)}</span>`;
+    right += impactLine(g, id, side);
   }
   const tip = g.final ? '' : ' title="' + ['fpi', 'sag', 'blend'].map(s => `${SOURCES[s].label}: ${fmtPct(Phi(spreadFor(s, id, other, g) / SD))}`).join(' · ') + '"';
   return `<button class="${cls}" type="button"${tip} ${g.final || fcs ? 'disabled' : `data-act="pick" data-g="${g.id}" data-s="${side}"`}>
@@ -523,7 +597,16 @@ function renderSheet() {
         <div><span>Rank </span><b>#${P.rk[id]}</b></div><div><span>Playoff </span><b>${status}</b></div>${odds}</div>
       <p class="hint" style="margin:0">Tap a team to pick it. Every tab updates as you go.</p>
       <div class="games">${games}${ccgCard}</div>
+      ${sheetImpact(id)}
     </div>`;
+}
+function sheetImpact(id) {
+  if (!oddsReady()) return '';
+  const now = ODDS.cnt[id].cfp / ODDS.done, rows = impactRows(id, 'cfp', 8, now);
+  if (!rows) return '';
+  return `<h2 style="margin-top:8px">Games that move its playoff chances</h2>
+    <div class="imp-list">${rows}</div>
+    <div><button class="btn" type="button" data-act="imp-open" data-v="${id}">See the top 25, and bye chances</button></div>`;
 }
 function openSheet(id) {
   S.team = id; const dlg = document.getElementById('sheet');
@@ -654,6 +737,34 @@ function renderPlayoff() {
     </div>`;
 }
 
+const METRICS = { cfp: 'Playoff chance', bye: 'First-round bye' };
+const teamName = (id, g) => T[id] ? T[id].name : (g.fcsName || 'FCS opponent');
+function impactRows(id, metric, limit, now) {
+  return topImpact(id, metric, limit).map((r, i) => {
+    const g = r.g, own = g.home === id || g.away === id;
+    const out = (who, p) => `<div class="out ${p > now + 0.005 ? 'up' : p < now - 0.005 ? 'down' : ''}"><span>If ${esc(teamName(who, g))} wins</span><b>${fmtPct(p)}</b></div>`;
+    return `<div class="imp-row"><div class="n">${i + 1}</div>${gameCard(g, true).replace('<div class="game">', `<div class="game${own ? ' own' : ''}">`)}
+      <div class="swing"><div class="delta">${Math.round(r.swing * 100)}-point swing${own ? ' · own game' : ''}</div>${out(g.away, r.away)}${out(g.home, r.home)}</div></div>`;
+  }).join('');
+}
+function renderImpact() {
+  if (!T[S.impTeam]) S.impTeam = P.seeds[0];
+  const id = S.impTeam, metric = METRICS[S.impMetric] ? S.impMetric : 'cfp', limit = S.impN === 50 ? 50 : 25;
+  const opts = [...FBS].sort((a, b) => T[a].name.localeCompare(T[b].name)).map(t => `<option value="${t}"${t === id ? ' selected' : ''}>${esc(T[t].name)}</option>`).join('');
+  const seg = (act, cur, items) => `<div class="seg" role="group">${items.map(([v, l]) => `<button type="button" data-act="${act}" data-v="${v}" aria-pressed="${cur === v}">${l}</button>`).join('')}</div>`;
+  const ready = oddsReady();
+  const now = ready ? ODDS.cnt[id][metric] / ODDS.done : null;
+  const head = `<h2>Biggest games for ${esc(T[id].name)}</h2>
+    <p class="lede">The open games that move this team's chances the most, its own and everyone else's. Each one compares the simulated seasons where the game went one way with the seasons where it went the other. Tap a team in any game to pick it. Picked games are locked in, so they drop off the list.</p>
+    <div class="imp-head"><select id="f-imp-team" aria-label="Team">${opts}</select>
+      ${seg('imp-metric', metric, Object.entries(METRICS))}${seg('imp-n', limit, [[25, 'Top 25'], [50, 'Top 50']])}
+      ${ready ? `<div class="now">${esc(METRICS[metric])} now <b>${fmtPct(now)}</b></div>` : ''}</div>`;
+  if (!ready) return head + `<p class="hint">Simulating seasons… ${ODDS ? ODDS.done.toLocaleString() : 0} of ${ODDS ? ODDS.N.toLocaleString() : ''}</p>`;
+  const rows = impactRows(id, metric, limit, now);
+  return head + `<div class="imp-list">${rows || `<p class="hint">No open game moves this much. ${esc(T[id].name)}'s ${metric === 'bye' ? 'bye chances are' : 'playoff chances are'} settled at ${fmtPct(now)}, or your picks have locked in every game that mattered.</p>`}</div>
+    <p class="note">Estimates from ${ODDS.done.toLocaleString()} simulated seasons. Games are ranked by how confident the swing is, not just its size, so a big upset that only came up a few times can't jump the list on luck, and games whose effect could be noise are left off.</p>`;
+}
+
 function renderOdds() {
   if (!ODDS) return '<p class="hint">Starting simulations…</p>';
   const { cnt, done, N } = ODDS, n = Math.max(done, 1);
@@ -682,7 +793,7 @@ function render() {
   document.getElementById('f-src').value = S.src;
   const dlg = document.getElementById('sheet');
   if (dlg.open && T[S.team]) { const y = dlg.scrollTop; dlg.innerHTML = renderSheet(); dlg.scrollTop = y; }
-  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, odds: renderOdds }[S.tab] || renderPicks;
+  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, impact: renderImpact, odds: renderOdds }[S.tab] || renderPicks;
   const main = document.getElementById('main');
   const focusId = document.activeElement && document.activeElement.id, selStart = document.activeElement && document.activeElement.selectionStart;
   main.innerHTML = f() + NOTE;
@@ -696,6 +807,9 @@ document.addEventListener('click', e => {
   const a = b.dataset.act;
   if (a === 'team') { openSheet(b.dataset.v); return; }
   if (a === 'close-sheet') { document.getElementById('sheet').close(); return; }
+  if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
+  if (a === 'imp-n') { S.impN = +b.dataset.v; save(); render(); return; }
+  if (a === 'imp-open') { S.impTeam = b.dataset.v; S.tab = 'impact'; document.getElementById('sheet').close(); save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'tab') { S.tab = b.dataset.v; save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'week') { S.week = +b.dataset.v; S.q = ''; save(); render(); return; }
   if (a === 'pick') { const g = b.dataset.g, s = b.dataset.s; S.picks[g] === s ? delete S.picks[g] : S.picks[g] = s; return changed(); }
@@ -722,6 +836,7 @@ sheetEl.addEventListener('close', () => { S.team = null; });
 document.addEventListener('toggle', e => { if (e.target.id === 'rules') { S.rulesOpen = e.target.open; save(); } }, true);
 document.addEventListener('change', e => {
   if (e.target.id === 'f-conf') { S.conf = e.target.value; save(); render(); }
+  if (e.target.id === 'f-imp-team') { S.impTeam = e.target.value; save(); render(); }
   if (e.target.id === 'f-src') { setSource(e.target.value); changed(); }
   if (e.target.id === 'f-h2h') { S.h2h = e.target.checked; changed(); }
 });
