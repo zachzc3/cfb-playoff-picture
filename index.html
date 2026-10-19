@@ -110,6 +110,26 @@ tr.ccg td:first-child { box-shadow: inset 3px 0 0 var(--pylon); }
 .pill { display: inline-block; font-family: var(--data); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; background: var(--pylon-soft); color: var(--pylon); white-space: nowrap; }
 .pill.g { background: var(--turf-soft); color: var(--turf); }
 .scroll { overflow-x: auto; }
+.tmb { display: block; width: 100%; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; min-width: 0; }
+.tmb:hover .nm { text-decoration: underline; text-underline-offset: 3px; }
+.ties { margin: 8px 0 4px; padding-left: 18px; font-size: 13px; color: var(--muted); display: grid; gap: 3px; }
+.ties b { color: var(--ink); font-family: var(--data); letter-spacing: .02em; }
+.rules { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; max-width: 80ch; }
+.rules summary { cursor: pointer; font-weight: 700; }
+.rules ol { display: grid; gap: 5px; padding-left: 22px; }
+.rules p { margin: 8px 0; }
+/* team schedule sheet */
+dialog.sheet { width: min(820px, calc(100vw - 32px)); max-height: 88vh; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); }
+dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
+.sheet-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--board); color: var(--board-ink); }
+.sheet-head .t { font-family: var(--display); font-size: clamp(18px, 3vw, 24px); line-height: 1.1; }
+.sheet-head .k { font-family: var(--data); font-size: 13px; letter-spacing: .05em; opacity: .85; }
+.sheet-head .x { margin-left: auto; background: none; border: 1px solid rgba(255,255,255,.35); color: var(--board-ink); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-weight: 600; }
+.sheet-body { padding: 14px 16px 18px; display: grid; gap: 12px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 18px; font-family: var(--data); font-size: 15px; }
+.facts span { color: var(--muted); }
+.facts b { font-variant-numeric: tabular-nums; }
+.sheet .games { grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
 
 /* title games */
 .tg { display: grid; gap: 6px; }
@@ -169,6 +189,7 @@ tr.ccg td:first-child { box-shadow: inset 3px 0 0 var(--pylon); }
     <span class="hint" id="pickcount"></span>
   </div>
   <main id="main"></main>
+  <dialog class="sheet" id="sheet" aria-label="Team schedule"></dialog>
 </div>
 
 <script src="data/season.js?v=2"></script>
@@ -241,7 +262,7 @@ function addResult(rec, g, homeWon, isConf) {
     const won = side === 'home' ? homeWon : !homeWon, opp = side === 'home' ? g.away : g.home;
     const r = rec[id]; won ? r.w++ : r.l++;
     if (isConf) won ? r.cw++ : r.cl++;
-    r.res.push({ opp, won, loc: loc(g, id), oppR: rOf(opp, g) });
+    r.res.push({ opp, won, conf: isConf, loc: loc(g, id), oppR: rOf(opp, g) });
   }
 }
 function decide(a, b, edge, pickId, mode, rng) {
@@ -250,19 +271,50 @@ function decide(a, b, edge, pickId, mode, rng) {
   if (mode === 'sim') return rng() < p ? a : b;
   return p >= 0.5 ? a : b;
 }
-function sortConf(ids, rec) {
-  const P = i => pct(rec[i].cw, rec[i].cl);
-  const a = [...ids].sort((x, y) => P(y) - P(x) || rec[x].cl - rec[y].cl);
+// Conference tiebreakers, in the order the FBS conferences broadly share. Each step returns a value per team
+// (higher is better). When a step separates a tied group, the teams it put on top and the rest are each
+// re-run from step 1, which is how the conferences handle multi-team ties.
+const confPct = (rec, i) => pct(rec[i].cw, rec[i].cl);
+function vsSet(rec, t, set) { let w = 0, l = 0; for (const r of rec[t].res) if (r.conf && set.has(r.opp)) r.won ? w++ : l++; return pct(w, l); }
+function commonOpps(rec, grp) {
+  const inGrp = new Set(grp);
+  const sets = grp.map(t => new Set(rec[t].res.filter(r => r.conf && !inGrp.has(r.opp)).map(r => r.opp)));
+  return [...sets[0]].filter(o => sets.every(s => s.has(o)));
+}
+const TIEBREAKERS = [
+  { name: 'Head-to-head', about: 'Record in games between the tied teams.',
+    fn: (rec, grp) => { const set = new Set(grp); return grp.map(t => vsSet(rec, t, set)); } },
+  { name: 'Common opponents', about: 'Record against conference opponents that all the tied teams played.',
+    fn: (rec, grp) => { const set = new Set(commonOpps(rec, grp)); return grp.map(t => vsSet(rec, t, set)); } },
+  { name: 'Best common opponent', about: 'Record against the highest-placed common opponent, then the next one down, until the tie breaks.',
+    fn: (rec, grp) => {
+      const opps = commonOpps(rec, grp).sort((a, b) => confPct(rec, b) - confPct(rec, a));
+      for (const o of opps) { const v = grp.map(t => vsSet(rec, t, new Set([o]))); if (Math.max(...v) !== Math.min(...v)) return v; }
+      return grp.map(() => 0);
+    } },
+  { name: 'Strength of schedule', about: 'Combined conference winning percentage of each team\'s conference opponents.',
+    fn: (rec, grp) => grp.map(t => { const os = rec[t].res.filter(r => r.conf); return os.length ? mean(os.map(r => confPct(rec, r.opp))) : 0; }) },
+  { name: 'Team rating', about: 'The rating chosen under "Win % from". The Power Four use the SportSource Analytics team rating score here, and several other conferences use a composite of computer rankings.',
+    fn: (rec, grp) => grp.map(t => R[t]) },
+];
+function breakTie(rec, grp, log) {
+  if (grp.length < 2) return grp;
+  for (const step of TIEBREAKERS) {
+    const v = step.fn(rec, grp), best = Math.max(...v);
+    const top = grp.filter((t, i) => best - v[i] < 1e-9);
+    if (top.length < grp.length) {
+      if (log) log.push({ teams: [...grp], step: step.name, top });
+      return [...breakTie(rec, top, log), ...breakTie(rec, grp.filter(t => !top.includes(t)), log)];
+    }
+  }
+  return grp;
+}
+function sortConf(ids, rec, log) {
+  const a = [...ids].sort((x, y) => confPct(rec, y) - confPct(rec, x) || rec[x].cl - rec[y].cl);
   const out = [];
   for (let i = 0; i < a.length;) {
-    let j = i; while (j < a.length && P(a[j]) === P(a[i]) && rec[a[j]].cl === rec[a[i]].cl) j++;
-    const tied = a.slice(i, j);
-    if (tied.length > 1) {
-      const set = new Set(tied), h = {};
-      tied.forEach(t => { let w = 0, l = 0; rec[t].res.forEach(r => { if (set.has(r.opp)) r.won ? w++ : l++; }); h[t] = pct(w, l); });
-      tied.sort((x, y) => h[y] - h[x] || R[y] - R[x]);
-    }
-    out.push(...tied); i = j;
+    let j = i; while (j < a.length && confPct(rec, a[j]) === confPct(rec, a[i]) && rec[a[j]].cl === rec[a[i]].cl) j++;
+    out.push(...breakTie(rec, a.slice(i, j), log)); i = j;
   }
   return out;
 }
@@ -281,7 +333,8 @@ function runSeason(mode, rng, w) {
   for (const c of D.conferences) {
     if (c.id === IND) continue;
     const mem = FBS.filter(i => T[i].conf === c.id);
-    const groups = c.divisions.length ? c.divisions.map(d => ({ div: d, ids: sortConf(mem.filter(i => T[i].div === d), rec) })) : [{ div: null, ids: sortConf(mem, rec) }];
+    const mk = (div, ids) => { const ties = mode === 'pick' ? [] : null; return { div, ids: sortConf(ids, rec, ties), ties }; };
+    const groups = c.divisions.length ? c.divisions.map(d => mk(d, mem.filter(i => T[i].div === d))) : [mk(null, mem)];
     st[c.id] = groups;
     const [a, b] = groups.length > 1 ? [groups[0].ids[0], groups[1].ids[0]] : groups[0].ids.slice(0, 2);
     const [hi, lo] = sortConf([a, b], rec)[0] === a ? [a, b] : [b, a];
@@ -430,6 +483,57 @@ function sideBtn(g, side) {
     ${chip(id, g.fcsName)}<span class="nm">${rank}${name}${r ? `<small>${recStr(r)}</small>` : ''}</span>${right}</button>`;
 }
 
+function gameCard(g, showWeek) {
+  const d = new Date(g.date);
+  const when = g.final ? 'Final' : g.live ? 'Live' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' }) + ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const extra = [];
+  if (showWeek) extra.push('Wk ' + g.week);
+  if (g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf && T[g.home].conf !== IND) extra.push(esc(CONF[T[g.home].conf].abbr.toUpperCase()));
+  if (g.neutral) extra.push('Neutral');
+  return `<div class="game"><div class="gmeta"><span>${when}</span>${extra.map(e => `<span class="tag">${e}</span>`).join('')}</div>
+    ${sideBtn(g, 'away')}${sideBtn(g, 'home')}</div>`;
+}
+const teamCell = id => `<button class="tmb" type="button" data-act="team" data-v="${id}" title="See ${esc(T[id].name)}'s schedule"><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></button>`;
+const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+
+function renderSheet() {
+  const id = S.team, t = T[id], r = P.rec[id];
+  const cf = CONF[t.conf], isInd = t.conf === IND;
+  let place = '', ccgCard = '';
+  if (!isInd) {
+    const gr = P.st[t.conf].find(g => g.ids.includes(id));
+    place = `${ordinal(gr.ids.indexOf(id) + 1)} in the ${esc(gr.div ? cf.abbr.toUpperCase() + ' ' + gr.div : cf.name.replace(' Conference', ''))}`;
+    const m = P.ccg[t.conf];
+    if (m.a === id || m.b === id) {
+      const pa = pWin(m.a, m.b, 0);
+      const btn = (x, p) => { const picked = S.ccg[t.conf] === x, proj = !S.ccg[t.conf] && m.win === x;
+        return `<button class="side${picked ? ' picked' : proj ? ' proj' : ''}" type="button" data-act="ccg" data-c="${t.conf}" data-v="${x}">${chip(x)}<span class="nm">${esc(T[x].name)}<small>${recStr(P.rec[x])}</small></span><span class="p">${fmtPct(p)}</span></button>`; };
+      ccgCard = `<div class="game"><div class="gmeta"><span>Conference title game</span><span class="tag">Neutral</span></div>${btn(m.a, pa)}${btn(m.b, 1 - pa)}</div>`;
+    }
+  }
+  const seed = P.seeds.indexOf(id);
+  const status = seed >= 0 ? `Seed ${seed + 1}${P.auto.has(id) ? ' (auto bid)' : ''}${seed < 4 ? ', first-round bye' : ''}` : 'Out';
+  const odds = ODDS && ODDS.done ? `<div><span>Playoff odds </span><b>${fmtPct(ODDS.cnt[id].cfp / ODDS.done)}</b></div>` : '';
+  const games = GAMES.filter(g => g.home === id || g.away === id).map(g => gameCard(g, true)).join('');
+  return `<div class="sheet-head">${chip(id)}<div><div class="t">${esc(t.name)} ${esc(t.mascot)}</div>
+      <div class="k">${esc(isInd ? 'Independent' : cf.name.replace(' Conference', ''))} · ${esc(SOURCES[S.src].label)} ${sgn(R[id])}</div></div>
+      <button class="x" type="button" data-act="close-sheet">Close</button></div>
+    <div class="sheet-body">
+      <div class="facts"><div><span>Projected </span><b>${recStr(r)}</b></div>${isInd ? '' : `<div><span>Conf </span><b>${r.cw}-${r.cl}</b></div><div><b>${place}</b></div>`}
+        <div><span>Rank </span><b>#${P.rk[id]}</b></div><div><span>Playoff </span><b>${status}</b></div>${odds}</div>
+      <p class="hint" style="margin:0">Tap a team to pick it. Every tab updates as you go.</p>
+      <div class="games">${games}${ccgCard}</div>
+    </div>`;
+}
+function openSheet(id) {
+  S.team = id; const dlg = document.getElementById('sheet');
+  dlg.innerHTML = renderSheet();
+  if (!dlg.open) dlg.showModal();
+  dlg.scrollTop = 0;
+  const next = dlg.querySelector('.game [data-act="pick"], .game [data-act="ccg"]');
+  if (next) dlg.scrollTop = next.closest('.game').offsetTop - dlg.querySelector('.sheet-head').offsetHeight - 70;
+}
+
 function renderPicks() {
   const weeks = [...new Set(GAMES.map(g => g.week))].sort((a, b) => a - b);
   if (S.week == null || !weeks.includes(S.week)) S.week = (GAMES.find(g => !g.final) || GAMES[GAMES.length - 1]).week;
@@ -441,16 +545,7 @@ function renderPicks() {
     return `<button class="wk${done ? ' done' : ''}" type="button" data-act="week" data-v="${w}" aria-pressed="${!q && S.week === w}">${w}</button>`;
   }).join('');
   const opts = `<option value="">All conferences</option>` + D.conferences.map(c => `<option value="${c.id}"${S.conf === c.id ? ' selected' : ''}>${esc(c.abbr === 'ind' ? 'Independents' : c.name.replace(' Conference', ''))}</option>`).join('');
-  const rows = list.map(g => {
-    const d = new Date(g.date);
-    const tags = [g.final ? 'Final' : g.live ? 'Live' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' }) + ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })];
-    const extra = [];
-    if (q) extra.push('Wk ' + g.week);
-    if (g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf) extra.push(esc(CONF[T[g.home].conf].abbr.toUpperCase()));
-    if (g.neutral) extra.push('Neutral');
-    return `<div class="game"><div class="gmeta"><span>${tags[0]}</span>${extra.map(e => `<span class="tag">${e}</span>`).join('')}</div>
-      ${sideBtn(g, 'away')}${sideBtn(g, 'home')}</div>`;
-  }).join('');
+  const rows = list.map(g => gameCard(g, !!q)).join('');
   return `<h2>${q ? `Games matching “${esc(S.q)}”` : `Week ${S.week}`}</h2>
     <p class="lede">Tap a team to pick it. Win chances come from ${SOURCES[S.src].label === 'FPI + Sagarin blend' ? 'an average of ESPN FPI and Sagarin' : SOURCES[S.src].label}, including home field. Hover a percentage to see each source. Records and rankings next to each team update as you pick.</p>
     <div class="filters"><div class="weeks" role="group" aria-label="Week">${wkBtns}</div>
@@ -464,20 +559,34 @@ function standTable(ids, slots) {
   return `<div class="scroll"><table><thead><tr><th>Team</th><th class="n">Conf</th><th class="n">All</th><th class="n hide-sm">Power</th><th class="n">Rk</th></tr></thead><tbody>` +
     ids.map((id, i) => {
       const r = P.rec[id];
-      return `<tr class="${i < slots ? 'ccg' : ''}"><td><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></td>
+      return `<tr class="${i < slots ? 'ccg' : ''}"><td>${teamCell(id)}</td>
         <td class="n">${r.cw}-${r.cl}</td><td class="n">${r.w}-${r.l}</td><td class="n hide-sm">${sgn(R[id])}</td><td class="n">${P.rk[id] <= 25 ? P.rk[id] : ''}</td></tr>`;
     }).join('') + `</tbody></table></div>`;
+}
+function tieNotes(ties) {
+  if (!ties || !ties.length) return '';
+  const abbrs = ids => ids.map(i => esc(T[i].abbr)).join(', ');
+  return `<ul class="ties">` + ties.map(t => {
+    const r = P.rec[t.teams[0]];
+    return `<li><b>${abbrs(t.teams)}</b> tied at ${r.cw}-${r.cl}. ${esc(t.step)} puts ${abbrs(t.top)} ahead.</li>`;
+  }).join('') + `</ul>`;
 }
 function renderStandings() {
   const cards = D.conferences.filter(c => c.id !== IND).map(c => {
     const groups = P.st[c.id], cg = P.ccg[c.id];
-    const body = groups.length > 1 ? groups.map(gr => `<h4>${esc(gr.div)}</h4>` + standTable(gr.ids, 1)).join('') : standTable(groups[0].ids, 2);
+    const body = groups.length > 1 ? groups.map(gr => `<h4>${esc(gr.div)}</h4>` + standTable(gr.ids, 1) + tieNotes(gr.ties)).join('') : standTable(groups[0].ids, 2) + tieNotes(groups[0].ties);
     return `<section class="card"><h3>${esc(c.name.replace(' Conference', ''))}<span class="pill">${esc(T[cg.a].abbr)} vs ${esc(T[cg.b].abbr)}</span></h3>${body}</section>`;
   }).join('');
   const ind = FBS.filter(i => T[i].conf === IND);
   const indCard = ind.length ? `<section class="card"><h3>Independents</h3>${standTable(ind.sort((a, b) => P.rk[a] - P.rk[b]), 0)}</section>` : '';
+  const rules = TIEBREAKERS.map(s => `<li><b>${esc(s.name)}.</b> ${esc(s.about)}</li>`).join('');
   return `<h2>Projected final standings</h2>
-    <p class="lede">Final records using real results, your picks, and favorites for everything else. The orange edge marks who plays in the title game. Ties break by head-to-head, then power rating, which is a simplified version of each conference's rules.</p>
+    <p class="lede">Final records using real results, your picks, and favorites for everything else. The orange edge marks who plays in the title game. Tap a team to see and change its schedule.</p>
+    <details class="rules" id="rules"${S.rulesOpen ? ' open' : ''}><summary>How ties are broken</summary>
+      <p>Teams with the same conference record go through these steps in order. When a step separates some of the tied teams, each smaller group starts over at step 1.</p>
+      <ol>${rules}<li><b>Coin flip.</b> Last resort. It never comes up here because ratings always differ.</li></ol>
+      <p class="hint">This is the order the FBS conferences broadly share. Each conference's official procedure adds details, such as how to handle teams that didn't all play each other, and the Sun Belt breaks ties within each division. Each conference publishes its exact rules on its website.</p>
+    </details>
     <div class="cards">${cards}${indCard}</div>`;
 }
 
@@ -504,7 +613,7 @@ function renderRank() {
     if (P.h2h[id]) tags.push(`<span class="pill" title="Moved ahead of ${esc(T[P.h2h[id]].name)} on head-to-head">Beat ${esc(T[P.h2h[id]].abbr)}</span>`);
     const seed = P.seeds.indexOf(id);
     if (seed >= 0) tags.push(`<span class="pill g">${seed < 4 ? 'Bye · ' : ''}Seed ${seed + 1}</span>`);
-    return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></td>
+    return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td>${teamCell(id)}</td>
       <td class="n">${recStr(r)}</td><td class="hide-sm">${esc(CONF[T[id].conf].abbr.toUpperCase())}</td>
       <td class="n">${sgn(P.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td><td>${tags.join(' ')}</td></tr>`;
   }).join('');
@@ -554,7 +663,7 @@ function renderOdds() {
   const opts = `<option value="">Top 40 overall</option>` + D.conferences.map(c => `<option value="${c.id}"${S.conf === c.id ? ' selected' : ''}>${esc(c.abbr === 'ind' ? 'Independents' : c.name.replace(' Conference', ''))}</option>`).join('');
   const rows = ids.map(id => {
     const c = cnt[id];
-    return `<tr><td><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></td><td class="n">${(c.w / n).toFixed(1)}</td>
+    return `<tr><td>${teamCell(id)}</td><td class="n">${(c.w / n).toFixed(1)}</td>
       <td class="n hide-sm">${T[id].conf === IND ? '' : fmtPct(c.ccg / n)}</td><td class="n">${T[id].conf === IND ? '' : fmtPct(c.conf / n)}</td>
       <td class="n">${fmtPct(c.cfp / n)}</td><td style="width:22%">${bar(c.cfp / n)}</td><td class="n hide-sm">${fmtPct(c.bye / n)}</td><td class="n">${fmtPct(c.title / n)}</td></tr>`;
   }).join('');
@@ -571,6 +680,8 @@ const NOTE = `<p class="note">Schedule, scores and FPI from ESPN; PREDICTOR rati
 function render() {
   renderTabs(); renderTally();
   document.getElementById('f-src').value = S.src;
+  const dlg = document.getElementById('sheet');
+  if (dlg.open && T[S.team]) { const y = dlg.scrollTop; dlg.innerHTML = renderSheet(); dlg.scrollTop = y; }
   const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, odds: renderOdds }[S.tab] || renderPicks;
   const main = document.getElementById('main');
   const focusId = document.activeElement && document.activeElement.id, selStart = document.activeElement && document.activeElement.selectionStart;
@@ -583,6 +694,8 @@ function changed() { project(); save(); render(); scheduleOdds(); }
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const a = b.dataset.act;
+  if (a === 'team') { openSheet(b.dataset.v); return; }
+  if (a === 'close-sheet') { document.getElementById('sheet').close(); return; }
   if (a === 'tab') { S.tab = b.dataset.v; save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'week') { S.week = +b.dataset.v; S.q = ''; save(); render(); return; }
   if (a === 'pick') { const g = b.dataset.g, s = b.dataset.s; S.picks[g] === s ? delete S.picks[g] : S.picks[g] = s; return changed(); }
@@ -603,6 +716,10 @@ document.addEventListener('click', e => {
     return changed();
   }
 });
+const sheetEl = document.getElementById('sheet');
+sheetEl.addEventListener('click', e => { if (e.target === sheetEl) sheetEl.close(); }); // backdrop
+sheetEl.addEventListener('close', () => { S.team = null; });
+document.addEventListener('toggle', e => { if (e.target.id === 'rules') { S.rulesOpen = e.target.open; save(); } }, true);
 document.addEventListener('change', e => {
   if (e.target.id === 'f-conf') { S.conf = e.target.value; save(); render(); }
   if (e.target.id === 'f-src') { setSource(e.target.value); changed(); }

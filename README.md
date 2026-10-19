@@ -7,7 +7,8 @@ Open `index.html` in a browser. It has no build step and needs no server.
 ## What it does
 
 - **Pick games.** Every FBS game, week by week. Completed games are locked with their real scores. Tap a team to pick it. Any game you don't pick goes to the favorite.
-- **Standings.** Projected final conference standings from the real results, your picks and the favorites.
+- **Standings.** Projected final conference standings from the real results, your picks and the favorites, with a note on how each tie was broken.
+- **Team schedules.** Click any team in Standings, Rankings or Odds to see its full schedule and change its games.
 - **Title games.** Conference championship matchups come from your standings. Pick the winners.
 - **Rankings.** A stand-in for the selection committee that blends a résumé score (strength of record) with a power rating. A slider controls how much weight each one gets.
 - **Playoff.** The 12-team field: the five highest-ranked conference champions plus seven at-large teams, seeded straight by ranking. Seeds 1–4 get byes. Pick your way to a national champion.
@@ -20,7 +21,7 @@ Picks are saved in your browser.
 - **Win probability:** from [ESPN FPI](https://www.espn.com/college-football/fpi), [Sagarin's PREDICTOR](http://sagarin.com/sports/cfsend.htm), or an average of the two (the default). Pick the source in the app. The spread is the rating difference plus home field (Sagarin's published edge, about 3.8 points; 2.5 points for FPI, an estimate). Win chance is a normal distribution around that spread with a 14-point standard deviation. Sagarin also rates FCS teams, so FCS opponents get real ratings.
 - **Résumé:** for each game, a win minus the chance a typical playoff team (the #12 rated team) would win the same game.
 - **Committee ranking:** a blend of résumé and rating, with a small bonus for conference champions. With head-to-head on, a team that beat a higher-ranked team moves directly ahead of it when it has the same or fewer losses and the two are comparable. Three-way loops cancel out.
-- **Conference tiebreakers:** head-to-head among the tied teams, then rating. Each conference's real rules are more detailed.
+- **Conference tiebreakers:** head-to-head, record vs. common opponents, record vs. the best common opponent, opponents' combined conference win %, then team rating. When a step splits a multi-team tie, each smaller group starts over at step 1. The Standings tab lists the steps and shows which one settled each tie. Each conference's official procedure has more detail.
 
 ## Updating the data
 
