@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Playoff Picture 2026</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Graduate&family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Layout: sideline clipboard - a scoreboard strip on top, a tab rail, one working panel below */
+:root {
+  --bg: #f2f4ef; --surface: #ffffff; --ink: #17221b; --muted: #5b6a60; --line: #d6ddd3;
+  --board: #173f2a; --board-ink: #f2f4ef; --turf: #1f5c3a; --turf-soft: #e2ede5;
+  --pylon: #d85f16; --pylon-soft: #fbe7da; --win: #1d7342; --loss: #a83a2e;
+  --display: 'Graduate', 'Rockwell', Georgia, serif;
+  --body: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --data: 'Barlow Condensed', 'Arial Narrow', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1511; --surface: #152019; --ink: #e5ebe6; --muted: #93a398; --line: #2a3a30;
+  --board: #10291b; --board-ink: #e5ebe6; --turf: #63c08a; --turf-soft: #1b3325;
+  --pylon: #f08b47; --pylon-soft: #3a2416; --win: #63c08a; --loss: #e57b6e; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e1511; --surface: #152019; --ink: #e5ebe6; --muted: #93a398; --line: #2a3a30;
+  --board: #10291b; --board-ink: #e5ebe6; --turf: #63c08a; --turf-soft: #1b3325;
+  --pylon: #f08b47; --pylon-soft: #3a2416; --win: #63c08a; --loss: #e57b6e; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.45; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+button { font: inherit; color: inherit; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--pylon); outline-offset: 2px; }
+.num, td.n { font-family: var(--data); font-variant-numeric: tabular-nums; }
+
+/* scoreboard strip, with chalk yard lines */
+.board { background: var(--board); color: var(--board-ink);
+  background-image: repeating-linear-gradient(90deg, transparent 0 79px, rgba(255,255,255,.06) 79px 81px); }
+.board .wrap { padding-block: 22px 18px; display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: end; justify-content: space-between; }
+.board h1 { font-family: var(--display); font-weight: 400; font-size: clamp(26px, 4.5vw, 40px); line-height: 1.05; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+.board .sub { margin: 6px 0 0; font-size: 14px; opacity: .8; }
+.tally { display: flex; gap: 22px; font-family: var(--data); }
+.tally div { display: grid; }
+.tally b { font-size: 26px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.tally span { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; opacity: .75; }
+
+/* tab rail + action row */
+.rail { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+.rail .wrap { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.tab { border: 0; background: none; padding: 13px 12px 11px; font-family: var(--data); font-weight: 600; font-size: 16px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); border-bottom: 3px solid transparent; cursor: pointer; white-space: nowrap; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--pylon); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-block: 16px 4px; }
+.btn { border: 1px solid var(--line); background: var(--surface); padding: 7px 13px; border-radius: 6px; font-weight: 600; font-size: 14px; cursor: pointer; }
+.btn:hover { border-color: var(--turf); }
+.btn.primary { background: var(--turf); border-color: var(--turf); color: var(--bg); }
+.hint { color: var(--muted); font-size: 13px; }
+main { padding-block: 10px 60px; }
+h2 { font-family: var(--data); font-size: 22px; font-weight: 700; letter-spacing: .02em; margin: 8px 0 4px; text-wrap: balance; }
+.lede { color: var(--muted); margin: 0 0 16px; max-width: 68ch; }
+
+/* team chip */
+.chip { display: inline-grid; place-items: center; min-width: 46px; height: 24px; padding: 0 5px; border-radius: 4px; background: var(--c); color: var(--ct); font-family: var(--data); font-weight: 700; font-size: 13px; letter-spacing: .03em; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); flex: none; }
+.chip.fcs { background: var(--line); color: var(--muted); }
+.rk { font-family: var(--data); font-size: 12px; color: var(--muted); font-weight: 600; }
+
+/* filters */
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+.weeks { display: flex; gap: 4px; overflow-x: auto; max-width: 100%; padding-bottom: 2px; }
+.wk { border: 1px solid var(--line); background: var(--surface); border-radius: 5px; padding: 4px 9px; font-family: var(--data); font-weight: 600; cursor: pointer; font-variant-numeric: tabular-nums; }
+.wk.done { color: var(--muted); }
+.wk[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+select, input[type="search"] { font: inherit; font-size: 14px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+
+/* game rows */
+.games { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 10px; }
+.game { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 10px; display: grid; gap: 6px; min-width: 0; }
+.gmeta { display: flex; gap: 8px; font-size: 12px; color: var(--muted); font-family: var(--data); letter-spacing: .03em; text-transform: uppercase; }
+.gmeta .tag { color: var(--turf); font-weight: 700; }
+.side { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 7px; cursor: pointer; min-width: 0; }
+.side .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.side .nm small { font-weight: 500; color: var(--muted); margin-left: 6px; font-family: var(--data); font-size: 13px; }
+.side .v { font-family: var(--data); font-weight: 700; font-size: 17px; font-variant-numeric: tabular-nums; }
+.side .p { font-family: var(--data); font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.side:hover:not(:disabled) { border-color: var(--line); }
+.side.proj { background: var(--turf-soft); }
+.side.picked { background: var(--turf-soft); border-color: var(--turf); box-shadow: inset 3px 0 0 var(--turf); }
+.side.picked .p { color: var(--turf); font-weight: 700; }
+.side:disabled { cursor: default; }
+.side.lost { opacity: .55; }
+.side.won .v { color: var(--win); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.legend i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; background: var(--turf-soft); }
+.legend i.pk { border: 1px solid var(--turf); box-shadow: inset 3px 0 0 var(--turf); }
+
+/* standings */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; align-items: start; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 12px 8px; min-width: 0; }
+.card h3 { margin: 0 0 6px; font-family: var(--data); font-size: 18px; letter-spacing: .02em; display: flex; justify-content: space-between; gap: 8px; }
+.card h4 { margin: 8px 0 2px; font-family: var(--data); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+table { border-collapse: collapse; width: 100%; }
+th { font-family: var(--data); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+th.n, td.n { text-align: right; }
+td.n { font-size: 15px; }
+.tm { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tm span.nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+tr.ccg td:first-child { box-shadow: inset 3px 0 0 var(--pylon); }
+.pill { display: inline-block; font-family: var(--data); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; background: var(--pylon-soft); color: var(--pylon); white-space: nowrap; }
+.pill.g { background: var(--turf-soft); color: var(--turf); }
+.scroll { overflow-x: auto; }
+
+/* title games */
+.tg { display: grid; gap: 6px; }
+.tg .side { border-color: var(--line); }
+
+/* rankings */
+.weigh { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+.weigh input { width: min(260px, 60vw); accent-color: var(--pylon); }
+.weigh label { font-weight: 600; }
+.cut td { border-top: 2px dashed var(--pylon); }
+
+/* bracket */
+.bracket { display: grid; grid-template-columns: repeat(4, minmax(225px, 1fr)); gap: 14px; min-width: 960px; }
+.round h3 { font-family: var(--data); font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 0 0 8px; }
+.round .stack { display: flex; flex-direction: column; justify-content: space-around; gap: 12px; height: calc(100% - 26px); }
+.mu { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.mu .lbl { font-family: var(--data); font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; padding: 4px 8px 0; }
+.mu .side { border-radius: 0; grid-template-columns: 18px auto 1fr auto; padding: 6px 8px; }
+.mu .sd { font-family: var(--data); font-weight: 700; color: var(--muted); font-size: 13px; text-align: right; }
+.champ { margin-top: 16px; background: var(--board); color: var(--board-ink); border-radius: 8px; padding: 14px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.champ .t { font-family: var(--display); font-size: clamp(20px, 3.4vw, 30px); line-height: 1.1; }
+.champ .k { font-family: var(--data); text-transform: uppercase; letter-spacing: .1em; font-size: 12px; opacity: .8; }
+.lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 14px; margin-top: 18px; }
+.lists ol, .lists ul { margin: 0; padding-left: 22px; display: grid; gap: 4px; }
+
+/* odds */
+.bar { position: relative; height: 16px; background: var(--turf-soft); border-radius: 3px; min-width: 70px; overflow: hidden; }
+.bar b { position: absolute; inset: 0 auto 0 0; background: var(--turf); border-radius: 3px; }
+.bar.o b { background: var(--pylon); }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin: 8px 0 14px; }
+.progress b { display: block; height: 100%; background: var(--pylon); width: 0; transition: width .15s; }
+.note { font-size: 13px; color: var(--muted); max-width: 72ch; margin-top: 18px; }
+@media (prefers-reduced-motion: reduce) { .progress b { transition: none; } }
+@media (max-width: 560px) { .tally b { font-size: 21px; } .hide-sm { display: none; } }
+</style>
+</head>
+<body>
+
+<header class="board">
+  <div class="wrap">
+    <div>
+      <h1>Playoff Picture 2026</h1>
+      <p class="sub" id="sub"></p>
+    </div>
+    <div class="tally" id="tally"></div>
+  </div>
+</header>
+<nav class="rail" aria-label="Sections">
+  <div class="wrap" role="tablist" id="tabs"></div>
+</nav>
+<div class="wrap">
+  <div class="actions">
+    <button class="btn" data-act="random" type="button">Simulate the rest</button>
+    <button class="btn" data-act="clear" type="button">Clear my picks</button>
+    <span class="hint" id="pickcount"></span>
+  </div>
+  <main id="main"></main>
+</div>
+
+<script src="data/season.js"></script>
+<script>
+const D = window.CFB_DATA;
+const T = Object.fromEntries(D.teams.map(t => [t.id, t]));
+const CONF = Object.fromEntries(D.conferences.map(c => [c.id, c]));
+const IND = '18';
+const FBS = D.teams.map(t => t.id);
+const GAMES = D.games;
+const G = Object.fromEntries(GAMES.map(g => [g.id, g]));
+const HFA = 2.5, SD = 13.5, CAP = 24, PRIOR_N = 2;
+const STORE = 'cfb-playoff-picture-2026';
+
+// ---------- state ----------
+let S = { picks: {}, ccg: {}, cfp: {}, w: 40, tab: 'picks', week: null, conf: '', q: '' };
+try { Object.assign(S, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+function save() { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} }
+
+// ---------- math ----------
+function erf(x) { const s = Math.sign(x); x = Math.abs(x); const t = 1 / (1 + 0.3275911 * x);
+  return s * (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x)); }
+const Phi = x => 0.5 * (1 + erf(x / Math.SQRT2));
+const loc = (g, id) => g.neutral ? 0 : (g.home === id ? HFA : -HFA);
+
+// Power rating: margin-of-victory rating from completed games (capped margins, home edge removed).
+const R = (() => {
+  const r = {}, gi = {};
+  [...FBS, 'FCS'].forEach(i => { r[i] = i === 'FCS' ? -20 : 0; gi[i] = []; });
+  GAMES.filter(g => g.final).forEach(g => { gi[g.home].push(g); gi[g.away].push(g); });
+  for (let it = 0; it < 300; it++) for (const i in r) {
+    let s = 0, n = 0;
+    for (const g of gi[i]) {
+      const me = g.home === i, opp = me ? g.away : g.home;
+      const m = Math.max(-CAP, Math.min(CAP, me ? g.hs - g.as : g.as - g.hs));
+      s += m - loc(g, i) + r[opp]; n++;
+    }
+    r[i] = (s + PRIOR_N * (i === 'FCS' ? -20 : 0)) / (n + PRIOR_N);
+  }
+  return r;
+})();
+const pWin = (a, b, edge = 0) => Phi((R[a] - R[b] + edge) / SD);
+const pHome = g => pWin(g.home, g.away, loc(g, g.home));
+const powerOrder = [...FBS].sort((a, b) => R[b] - R[a]);
+const BASE = R[powerOrder[11]]; // a typical playoff-caliber team
+const zPow = (() => { const v = FBS.map(i => R[i]); const m = v.reduce((a, b) => a + b) / v.length;
+  const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length); return Object.fromEntries(FBS.map(i => [i, (R[i] - m) / sd])); })();
+
+// ---------- season engine ----------
+const pct = (w, l) => (w + l) ? w / (w + l) : 0;
+function addResult(rec, g, homeWon, isConf) {
+  for (const side of ['home', 'away']) {
+    const id = g[side]; if (!rec[id]) continue;
+    const won = side === 'home' ? homeWon : !homeWon, opp = side === 'home' ? g.away : g.home;
+    const r = rec[id]; won ? r.w++ : r.l++;
+    if (isConf) won ? r.cw++ : r.cl++;
+    r.res.push({ opp, won, loc: loc(g, id) });
+  }
+}
+function decide(a, b, edge, pickId, mode, rng) {
+  if (pickId === a || pickId === b) return pickId;
+  const p = pWin(a, b, edge);
+  if (mode === 'sim') return rng() < p ? a : b;
+  return p >= 0.5 ? a : b;
+}
+function sortConf(ids, rec) {
+  const P = i => pct(rec[i].cw, rec[i].cl);
+  const a = [...ids].sort((x, y) => P(y) - P(x) || rec[x].cl - rec[y].cl);
+  const out = [];
+  for (let i = 0; i < a.length;) {
+    let j = i; while (j < a.length && P(a[j]) === P(a[i]) && rec[a[j]].cl === rec[a[i]].cl) j++;
+    const tied = a.slice(i, j);
+    if (tied.length > 1) {
+      const set = new Set(tied), h = {};
+      tied.forEach(t => { let w = 0, l = 0; rec[t].res.forEach(r => { if (set.has(r.opp)) r.won ? w++ : l++; }); h[t] = pct(w, l); });
+      tied.sort((x, y) => h[y] - h[x] || R[y] - R[x]);
+    }
+    out.push(...tied); i = j;
+  }
+  return out;
+}
+function runSeason(mode, rng, w) {
+  const rec = {}; FBS.forEach(i => rec[i] = { w: 0, l: 0, cw: 0, cl: 0, res: [] });
+  for (const g of GAMES) {
+    let hw;
+    if (g.final) hw = g.hs > g.as;
+    else if (S.picks[g.id]) hw = S.picks[g.id] === 'home';
+    else hw = mode === 'sim' ? rng() < pHome(g) : pHome(g) >= 0.5;
+    const isConf = g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf && T[g.home].conf !== IND;
+    addResult(rec, g, hw, isConf);
+  }
+  // standings and title games
+  const st = {}, ccg = {}, champs = {};
+  for (const c of D.conferences) {
+    if (c.id === IND) continue;
+    const mem = FBS.filter(i => T[i].conf === c.id);
+    const groups = c.divisions.length ? c.divisions.map(d => ({ div: d, ids: sortConf(mem.filter(i => T[i].div === d), rec) })) : [{ div: null, ids: sortConf(mem, rec) }];
+    st[c.id] = groups;
+    const [a, b] = groups.length > 1 ? [groups[0].ids[0], groups[1].ids[0]] : groups[0].ids.slice(0, 2);
+    const [hi, lo] = sortConf([a, b], rec)[0] === a ? [a, b] : [b, a];
+    const win = decide(hi, lo, 0, S.ccg[c.id], mode, rng);
+    ccg[c.id] = { a: hi, b: lo, win };
+    champs[c.id] = win;
+    addResult(rec, { home: hi, away: lo, neutral: true }, win === hi, false);
+  }
+  // committee-style ranking: blend of power rating and strength of record
+  const sor = {};
+  FBS.forEach(i => { let s = 0; for (const r of rec[i].res) s += (r.won ? 1 : 0) - Phi((BASE - R[r.opp] + r.loc) / SD); sor[i] = s; });
+  const sv = FBS.map(i => sor[i]), sm = sv.reduce((a, b) => a + b) / sv.length;
+  const ssd = Math.sqrt(sv.reduce((a, b) => a + (b - sm) ** 2, 0) / sv.length) || 1;
+  const champSet = new Set(Object.values(champs)), wp = w / 100;
+  const score = {};
+  FBS.forEach(i => score[i] = wp * zPow[i] + (1 - wp) * (sor[i] - sm) / ssd + (champSet.has(i) ? 0.15 : 0));
+  const ranked = [...FBS].sort((a, b) => score[b] - score[a]);
+  const rk = {}; ranked.forEach((id, i) => rk[id] = i + 1);
+  // 12-team field: five highest-ranked conference champions + seven at-large, seeded straight by ranking
+  const auto = [...champSet].sort((a, b) => rk[a] - rk[b]).slice(0, 5);
+  const field = new Set(auto);
+  for (const id of ranked) { if (field.size >= 12) break; field.add(id); }
+  const seeds = [...field].sort((a, b) => rk[a] - rk[b]);
+  const bracket = playBracket(seeds, mode, rng);
+  return { rec, st, ccg, champs, champSet, sor, score, ranked, rk, auto: new Set(auto), seeds, bracket };
+}
+function playBracket(seeds, mode, rng) {
+  const s = n => seeds[n - 1], games = {};
+  const play = (id, round, label, a, b, home) => {
+    const win = decide(a, b, home ? HFA : 0, S.cfp[id], mode, rng);
+    return games[id] = { id, round, label, a, b, win, home };
+  };
+  const A = play('R1A', 0, 'Campus site', s(5), s(12), true), B = play('R1B', 0, 'Campus site', s(6), s(11), true);
+  const C = play('R1C', 0, 'Campus site', s(7), s(10), true), Dd = play('R1D', 0, 'Campus site', s(8), s(9), true);
+  const Q1 = play('QF1', 1, 'Quarterfinal', s(1), Dd.win), Q4 = play('QF4', 1, 'Quarterfinal', s(4), A.win);
+  const Q2 = play('QF2', 1, 'Quarterfinal', s(2), C.win), Q3 = play('QF3', 1, 'Quarterfinal', s(3), B.win);
+  const S1 = play('SF1', 2, 'Semifinal', Q1.win, Q4.win), S2 = play('SF2', 2, 'Semifinal', Q2.win, Q3.win);
+  play('F', 3, 'Jan 25 · Las Vegas', S1.win, S2.win);
+  return games;
+}
+
+// ---------- monte carlo ----------
+let ODDS = null, oddsJob = 0;
+function runOdds(N = 2000) {
+  const job = ++oddsJob, cnt = {};
+  FBS.forEach(i => cnt[i] = { ccg: 0, conf: 0, cfp: 0, bye: 0, title: 0, w: 0 });
+  let seed = 12345; const rng = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  let done = 0;
+  ODDS = { running: true, done: 0, N, cnt };
+  const step = () => {
+    if (job !== oddsJob) return;
+    for (let k = 0; k < 100 && done < N; k++, done++) {
+      const r = runSeason('sim', rng, S.w);
+      for (const c in r.ccg) { cnt[r.ccg[c].a].ccg++; cnt[r.ccg[c].b].ccg++; cnt[r.ccg[c].win].conf++; }
+      r.seeds.forEach((id, i) => { cnt[id].cfp++; if (i < 4) cnt[id].bye++; });
+      cnt[r.bracket.F.win].title++;
+      FBS.forEach(i => cnt[i].w += r.rec[i].w);
+    }
+    ODDS.done = done;
+    if (done >= N) ODDS.running = false;
+    if (S.tab === 'odds') render(); else renderTally();
+    if (done < N) setTimeout(step, 0);
+  };
+  setTimeout(step, 0);
+}
+let oddsTimer;
+function scheduleOdds() { clearTimeout(oddsTimer); if (ODDS) ODDS.stale = true; oddsTimer = setTimeout(() => runOdds(), 700); }
+
+// ---------- rendering helpers ----------
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function inkFor(hex) { const n = parseInt(hex || '666666', 16); const r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#111' : '#fff'; }
+function chip(id, fcsName) {
+  if (!T[id]) return `<span class="chip fcs" title="${esc(fcsName || 'FCS')}">FCS</span>`;
+  const t = T[id]; return `<span class="chip" style="--c:#${esc(t.color)};--ct:${inkFor(t.color)}">${esc(t.abbr)}</span>`;
+}
+const recStr = (r) => `${r.w}-${r.l}`;
+const fmtPct = p => p >= .995 ? '>99%' : p < .005 ? '<1%' : Math.round(p * 100) + '%';
+const sgn = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(1);
+let P; // deterministic projection from picks + favorites
+function project() { P = runSeason('pick', null, S.w); }
+
+const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['odds', 'Odds']];
+function renderTabs() {
+  document.getElementById('tabs').innerHTML = TABS.map(([k, l]) =>
+    `<button class="tab" role="tab" type="button" data-act="tab" data-v="${k}" aria-selected="${S.tab === k}">${l}</button>`).join('');
+}
+function renderTally() {
+  const fin = GAMES.filter(g => g.final).length, left = GAMES.length - fin;
+  const champ = P.bracket.F.win;
+  document.getElementById('sub').textContent = `${D.season} FBS season · results through ${new Date(D.updated.replace(' UTC', 'Z').replace(' ', 'T')).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${left} games left to call`;
+  document.getElementById('tally').innerHTML =
+    `<div><b>${fin}</b><span>Final</span></div><div><b>${Object.keys(S.picks).length}</b><span>Your picks</span></div>` +
+    `<div><b>${esc(T[champ].abbr)}</b><span>Your champ</span></div>`;
+  const n = Object.keys(S.picks).length;
+  document.getElementById('pickcount').textContent = n ? `Unpicked games go to the favorite.` : `Every unplayed game is set to the favorite. Tap a team to pick an upset.`;
+}
+
+function sideBtn(g, side) {
+  const id = g[side], other = g[side === 'home' ? 'away' : 'home'];
+  const p = side === 'home' ? pHome(g) : 1 - pHome(g);
+  const fcs = !T[id];
+  const r = !fcs && P.rec[id], rank = !fcs && P.rk[id] <= 25 ? `<span class="rk">${P.rk[id]}</span> ` : '';
+  const name = fcs ? esc(g.fcsName || 'FCS opponent') : esc(T[id].name);
+  let cls = 'side', right;
+  if (g.final) {
+    const won = (side === 'home' ? g.hs > g.as : g.as > g.hs);
+    cls += won ? ' won' : ' lost';
+    right = `<span class="v">${side === 'home' ? g.hs : g.as}</span>`;
+  } else {
+    const pick = S.picks[g.id];
+    if (pick === side) cls += ' picked'; else if (!pick && p >= 0.5) cls += ' proj';
+    right = `<span class="p">${fmtPct(p)}</span>`;
+  }
+  const dis = g.final || fcs || !T[other] && false;
+  return `<button class="${cls}" type="button" ${g.final || fcs ? 'disabled' : `data-act="pick" data-g="${g.id}" data-s="${side}"`}>
+    ${chip(id, g.fcsName)}<span class="nm">${rank}${name}${r ? `<small>${recStr(r)}</small>` : ''}</span>${right}</button>`;
+}
+
+function renderPicks() {
+  const weeks = [...new Set(GAMES.map(g => g.week))].sort((a, b) => a - b);
+  if (S.week == null || !weeks.includes(S.week)) S.week = (GAMES.find(g => !g.final) || GAMES[GAMES.length - 1]).week;
+  const q = S.q.trim().toLowerCase();
+  const match = id => T[id] && ((!S.conf || T[id].conf === S.conf) && (!q || (T[id].name + ' ' + T[id].abbr + ' ' + T[id].mascot).toLowerCase().includes(q)));
+  const list = GAMES.filter(g => (q ? true : g.week === S.week) && (match(g.home) || match(g.away)));
+  const wkBtns = weeks.map(w => {
+    const done = GAMES.filter(g => g.week === w).every(g => g.final);
+    return `<button class="wk${done ? ' done' : ''}" type="button" data-act="week" data-v="${w}" aria-pressed="${!q && S.week === w}">${w}</button>`;
+  }).join('');
+  const opts = `<option value="">All conferences</option>` + D.conferences.map(c => `<option value="${c.id}"${S.conf === c.id ? ' selected' : ''}>${esc(c.abbr === 'ind' ? 'Independents' : c.name.replace(' Conference', ''))}</option>`).join('');
+  const rows = list.map(g => {
+    const d = new Date(g.date);
+    const tags = [g.final ? 'Final' : g.live ? 'Live' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' }) + ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })];
+    const extra = [];
+    if (q) extra.push('Wk ' + g.week);
+    if (g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf) extra.push(esc(CONF[T[g.home].conf].abbr.toUpperCase()));
+    if (g.neutral) extra.push('Neutral');
+    return `<div class="game"><div class="gmeta"><span>${tags[0]}</span>${extra.map(e => `<span class="tag">${e}</span>`).join('')}</div>
+      ${sideBtn(g, 'away')}${sideBtn(g, 'home')}</div>`;
+  }).join('');
+  return `<h2>${q ? `Games matching “${esc(S.q)}”` : `Week ${S.week}`}</h2>
+    <p class="lede">Tap a team to pick it. Percentages come from a power rating built on this season's scores. Records and rankings next to each team update as you pick.</p>
+    <div class="filters"><div class="weeks" role="group" aria-label="Week">${wkBtns}</div>
+      <select id="f-conf" aria-label="Conference">${opts}</select>
+      <input id="f-q" type="search" placeholder="Find a team's schedule" value="${esc(S.q)}" aria-label="Team search"></div>
+    <div class="legend"><span><i></i>Projected winner (favorite)</span><span><i class="pk"></i>Your pick</span></div>
+    <div class="games">${rows || '<p class="hint">No games match those filters.</p>'}</div>`;
+}
+
+function standTable(ids, slots) {
+  return `<div class="scroll"><table><thead><tr><th>Team</th><th class="n">Conf</th><th class="n">All</th><th class="n hide-sm">Power</th><th class="n">Rk</th></tr></thead><tbody>` +
+    ids.map((id, i) => {
+      const r = P.rec[id];
+      return `<tr class="${i < slots ? 'ccg' : ''}"><td><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></td>
+        <td class="n">${r.cw}-${r.cl}</td><td class="n">${r.w}-${r.l}</td><td class="n hide-sm">${sgn(R[id])}</td><td class="n">${P.rk[id] <= 25 ? P.rk[id] : ''}</td></tr>`;
+    }).join('') + `</tbody></table></div>`;
+}
+function renderStandings() {
+  const cards = D.conferences.filter(c => c.id !== IND).map(c => {
+    const groups = P.st[c.id], cg = P.ccg[c.id];
+    const body = groups.length > 1 ? groups.map(gr => `<h4>${esc(gr.div)}</h4>` + standTable(gr.ids, 1)).join('') : standTable(groups[0].ids, 2);
+    return `<section class="card"><h3>${esc(c.name.replace(' Conference', ''))}<span class="pill">${esc(T[cg.a].abbr)} vs ${esc(T[cg.b].abbr)}</span></h3>${body}</section>`;
+  }).join('');
+  const ind = FBS.filter(i => T[i].conf === IND);
+  const indCard = ind.length ? `<section class="card"><h3>Independents</h3>${standTable(ind.sort((a, b) => P.rk[a] - P.rk[b]), 0)}</section>` : '';
+  return `<h2>Projected final standings</h2>
+    <p class="lede">Final records using real results, your picks, and favorites for everything else. The orange edge marks who plays in the title game. Ties break by head-to-head, then power rating, which is a simplified version of each conference's rules.</p>
+    <div class="cards">${cards}${indCard}</div>`;
+}
+
+function renderTitle() {
+  const cards = D.conferences.filter(c => c.id !== IND).map(c => {
+    const m = P.ccg[c.id], pa = pWin(m.a, m.b, 0);
+    const btn = (id, p) => {
+      const picked = S.ccg[c.id] === id, proj = !S.ccg[c.id] && m.win === id;
+      return `<button class="side${picked ? ' picked' : proj ? ' proj' : ''}" type="button" data-act="ccg" data-c="${c.id}" data-v="${id}">
+        ${chip(id)}<span class="nm">${P.rk[id] <= 25 ? `<span class="rk">${P.rk[id]}</span> ` : ''}${esc(T[id].name)}<small>${recStr(P.rec[id])}</small></span><span class="p">${fmtPct(p)}</span></button>`;
+    };
+    const bid = P.auto.has(m.win) ? '<span class="pill g">Auto bid</span>' : P.seeds.includes(m.win) ? '<span class="pill g">In field</span>' : '';
+    return `<section class="card tg"><h3>${esc(c.name.replace(' Conference', ''))} title game ${bid}</h3>${btn(m.a, pa)}${btn(m.b, 1 - pa)}</section>`;
+  }).join('');
+  return `<h2>Conference championship games</h2>
+    <p class="lede">Matchups follow your projected standings, so they change when you change regular-season picks. Pick a winner here or let the favorite win. The five highest-ranked champions get automatic playoff bids.</p>
+    <div class="cards">${cards}</div>`;
+}
+
+function renderRank() {
+  const rows = P.ranked.slice(0, 30).map((id, i) => {
+    const r = P.rec[id], tags = [];
+    if (P.champSet.has(id)) tags.push('<span class="pill">Champ</span>');
+    const seed = P.seeds.indexOf(id);
+    if (seed >= 0) tags.push(`<span class="pill g">${seed < 4 ? 'Bye · ' : ''}Seed ${seed + 1}</span>`);
+    return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></td>
+      <td class="n">${recStr(r)}</td><td class="hide-sm">${esc(CONF[T[id].conf].abbr.toUpperCase())}</td>
+      <td class="n">${sgn(P.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td><td>${tags.join(' ')}</td></tr>`;
+  }).join('');
+  return `<h2>Projected final committee rankings</h2>
+    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is points better than an average FBS team on a neutral field.</p>
+    <div class="weigh"><label for="f-w">Committee leans on</label><span class="hint">Résumé</span>
+      <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span></div>
+    <div class="scroll"><table><thead><tr><th class="n">#</th><th>Team</th><th class="n">Rec</th><th class="hide-sm">Conf</th><th class="n">Résumé</th><th class="n hide-sm">Power</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderPlayoff() {
+  const seedOf = id => P.seeds.indexOf(id) + 1;
+  const mu = g => {
+    const pa = pWin(g.a, g.b, g.home ? HFA : 0);
+    const side = (id, p) => {
+      const picked = S.cfp[g.id] === id, proj = !picked && g.win === id && !(S.cfp[g.id] === g.a || S.cfp[g.id] === g.b);
+      return `<button class="side${picked ? ' picked' : proj ? ' proj' : ''}" type="button" data-act="cfp" data-g="${g.id}" data-v="${id}">
+        <span class="sd">${seedOf(id)}</span>${chip(id)}<span class="nm">${esc(T[id].name)}<small>${recStr(P.rec[id])}</small></span><span class="p">${fmtPct(p)}</span></button>`;
+    };
+    return `<div class="mu"><div class="lbl">${g.label}</div>${side(g.a, pa)}${side(g.b, 1 - pa)}</div>`;
+  };
+  const B = P.bracket, col = (title, ids) => `<div class="round"><h3>${title}</h3><div class="stack">${ids.map(k => mu(B[k])).join('')}</div></div>`;
+  const champ = B.F.win;
+  const out = P.ranked.filter(id => !P.seeds.includes(id)).slice(0, 4);
+  const atLarge = P.seeds.filter(id => !P.auto.has(id));
+  const lastIn = [...atLarge].sort((a, b) => P.rk[b] - P.rk[a]).slice(0, 4);
+  return `<h2>Your 12-team bracket</h2>
+    <p class="lede">Seeds 1–4 get byes and seeds 5–8 host first-round games on campus. Teams are seeded straight by ranking, and the five highest-ranked conference champions are guaranteed a spot. Tap a team to advance it.</p>
+    <div class="scroll"><div class="bracket">
+      ${col('First round', ['R1D', 'R1A', 'R1C', 'R1B'])}${col('Quarterfinals', ['QF1', 'QF4', 'QF2', 'QF3'])}${col('Semifinals', ['SF1', 'SF2'])}${col('National championship', ['F'])}
+    </div></div>
+    <div class="champ">${chip(champ)}<div><div class="k">Your national champion</div><div class="t">${esc(T[champ].name)} ${esc(T[champ].mascot)}</div></div></div>
+    <div class="lists">
+      <section class="card"><h3>Automatic bids</h3><ol>${[...P.auto].map(id => `<li>${esc(T[id].name)} <span class="hint">${esc(CONF[T[id].conf].abbr.toUpperCase())} · #${P.rk[id]}</span></li>`).join('')}</ol></section>
+      <section class="card"><h3>Last four in</h3><ul>${lastIn.map(id => `<li>${esc(T[id].name)} <span class="hint">#${P.rk[id]} · ${recStr(P.rec[id])}</span></li>`).join('')}</ul></section>
+      <section class="card"><h3>First four out</h3><ul>${out.map(id => `<li>${esc(T[id].name)} <span class="hint">#${P.rk[id]} · ${recStr(P.rec[id])}</span></li>`).join('')}</ul></section>
+    </div>`;
+}
+
+function renderOdds() {
+  if (!ODDS) return '<p class="hint">Starting simulations…</p>';
+  const { cnt, done, N } = ODDS, n = Math.max(done, 1);
+  const ids = FBS.filter(i => (!S.conf || T[i].conf === S.conf)).sort((a, b) => cnt[b].cfp - cnt[a].cfp || cnt[b].conf - cnt[a].conf || R[b] - R[a])
+    .filter((id, i) => S.conf || i < 40);
+  const bar = (v, o) => `<div class="bar${o ? ' o' : ''}" title="${(v * 100).toFixed(1)}%"><b style="width:${(v * 100).toFixed(1)}%"></b></div>`;
+  const opts = `<option value="">Top 40 overall</option>` + D.conferences.map(c => `<option value="${c.id}"${S.conf === c.id ? ' selected' : ''}>${esc(c.abbr === 'ind' ? 'Independents' : c.name.replace(' Conference', ''))}</option>`).join('');
+  const rows = ids.map(id => {
+    const c = cnt[id];
+    return `<tr><td><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></td><td class="n">${(c.w / n).toFixed(1)}</td>
+      <td class="n hide-sm">${T[id].conf === IND ? '' : fmtPct(c.ccg / n)}</td><td class="n">${T[id].conf === IND ? '' : fmtPct(c.conf / n)}</td>
+      <td class="n">${fmtPct(c.cfp / n)}</td><td style="width:22%">${bar(c.cfp / n)}</td><td class="n hide-sm">${fmtPct(c.bye / n)}</td><td class="n">${fmtPct(c.title / n)}</td></tr>`;
+  }).join('');
+  return `<h2>Playoff odds</h2>
+    <p class="lede">${N.toLocaleString()} simulated seasons. Your picks are locked in and every other game is a weighted coin flip based on the power rating, title games and playoff included.</p>
+    <div class="filters"><select id="f-conf" aria-label="Conference">${opts}</select>
+      <button class="btn" type="button" data-act="rerun">Run again</button>
+      <span class="hint">${ODDS.running ? `Simulating… ${done.toLocaleString()} of ${N.toLocaleString()}` : ODDS.stale ? 'Updating for your new picks…' : `Done · ${done.toLocaleString()} seasons`}</span></div>
+    <div class="progress"><b style="width:${(done / N * 100).toFixed(0)}%"></b></div>
+    <div class="scroll"><table><thead><tr><th>Team</th><th class="n">Avg W</th><th class="n hide-sm">Title game</th><th class="n">Conf champ</th><th class="n">Playoff</th><th></th><th class="n hide-sm">Bye</th><th class="n">Natl champ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+const NOTE = `<p class="note">Schedule and scores from ESPN, last pulled ${esc(D.updated)}. The power rating and committee model are this page's own estimates, not ESPN's FPI or the real CFP rankings.</p>`;
+function render() {
+  renderTabs(); renderTally();
+  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, odds: renderOdds }[S.tab] || renderPicks;
+  const main = document.getElementById('main');
+  const focusId = document.activeElement && document.activeElement.id, selStart = document.activeElement && document.activeElement.selectionStart;
+  main.innerHTML = f() + NOTE;
+  if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); if (el.type === 'search' && selStart != null) el.setSelectionRange(selStart, selStart); } }
+}
+function changed() { project(); save(); render(); scheduleOdds(); }
+
+// ---------- events ----------
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const a = b.dataset.act;
+  if (a === 'tab') { S.tab = b.dataset.v; save(); render(); window.scrollTo({ top: 0 }); return; }
+  if (a === 'week') { S.week = +b.dataset.v; S.q = ''; save(); render(); return; }
+  if (a === 'pick') { const g = b.dataset.g, s = b.dataset.s; S.picks[g] === s ? delete S.picks[g] : S.picks[g] = s; return changed(); }
+  if (a === 'ccg') { const c = b.dataset.c, v = b.dataset.v; S.ccg[c] === v ? delete S.ccg[c] : S.ccg[c] = v; return changed(); }
+  if (a === 'cfp') { const g = b.dataset.g, v = b.dataset.v; S.cfp[g] === v ? delete S.cfp[g] : S.cfp[g] = v; return changed(); }
+  if (a === 'clear') { S.picks = {}; S.ccg = {}; S.cfp = {}; return changed(); }
+  if (a === 'rerun') { runOdds(); render(); return; }
+  if (a === 'random') {
+    // Fill every open game with a weighted random result, then lock in the resulting title games and bracket.
+    for (const g of GAMES) if (!g.final && !S.picks[g.id] && T[g.home] && T[g.away]) S.picks[g.id] = Math.random() < pHome(g) ? 'home' : 'away';
+    for (const g of GAMES) if (!g.final && !S.picks[g.id]) S.picks[g.id] = pHome(g) >= 0.5 ? 'home' : 'away';
+    S.ccg = {}; S.cfp = {}; project();
+    for (const c in P.ccg) { const m = P.ccg[c]; S.ccg[c] = Math.random() < pWin(m.a, m.b) ? m.a : m.b; }
+    project();
+    for (const k of ['R1A', 'R1B', 'R1C', 'R1D', 'QF1', 'QF2', 'QF3', 'QF4', 'SF1', 'SF2', 'F']) {
+      const g = P.bracket[k]; S.cfp[k] = Math.random() < pWin(g.a, g.b, g.home ? HFA : 0) ? g.a : g.b; project();
+    }
+    return changed();
+  }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'f-conf') { S.conf = e.target.value; save(); render(); }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'f-q') { S.q = e.target.value; save(); render(); }
+  if (e.target.id === 'f-w') { S.w = +e.target.value; project(); save(); render(); scheduleOdds(); }
+});
+
+project(); render(); runOdds();
+</script>
+</body>
+</html>
