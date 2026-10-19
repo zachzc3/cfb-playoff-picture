@@ -171,7 +171,11 @@ tr.ccg td:first-child { box-shadow: inset 3px 0 0 var(--pylon); }
   <main id="main"></main>
 </div>
 
-<script src="data/season.js"></script>
+<script src="data/season.js?v=2"></script>
+<script>
+// A browser can hold an older cached copy of the data file that lacks fields this page needs; fetch a fresh one.
+if (!window.CFB_DATA || !window.CFB_DATA.ratings) document.write('<script src="data/season.js?t=' + Date.now() + '"><\/script>');
+</script>
 <script>
 const D = window.CFB_DATA;
 const T = Object.fromEntries(D.teams.map(t => [t.id, t]));
