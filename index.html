@@ -164,6 +164,8 @@ tr.ccg td:first-child { box-shadow: inset 3px 0 0 var(--pylon); }
   <div class="actions">
     <button class="btn" data-act="random" type="button">Simulate the rest</button>
     <button class="btn" data-act="clear" type="button">Clear my picks</button>
+    <label class="hint" for="f-src">Win % from</label>
+    <select id="f-src"><option value="blend">FPI + Sagarin blend</option><option value="fpi">ESPN FPI</option><option value="sag">Sagarin</option></select>
     <span class="hint" id="pickcount"></span>
   </div>
   <main id="main"></main>
@@ -178,11 +180,11 @@ const IND = '18';
 const FBS = D.teams.map(t => t.id);
 const GAMES = D.games;
 const G = Object.fromEntries(GAMES.map(g => [g.id, g]));
-const HFA = 2.5, SD = 13.5, CAP = 24, PRIOR_N = 2;
+const SD = 14, H2H_GAP = 0.5; // ranking-score units; roughly ten spots near the top
 const STORE = 'cfb-playoff-picture-2026';
 
 // ---------- state ----------
-let S = { picks: {}, ccg: {}, cfp: {}, w: 40, tab: 'picks', week: null, conf: '', q: '' };
+let S = { picks: {}, ccg: {}, cfp: {}, w: 40, tab: 'picks', week: null, conf: '', q: '', src: 'blend', h2h: true };
 try { Object.assign(S, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
 function save() { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} }
 
@@ -190,30 +192,42 @@ function save() { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch 
 function erf(x) { const s = Math.sign(x); x = Math.abs(x); const t = 1 / (1 + 0.3275911 * x);
   return s * (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x)); }
 const Phi = x => 0.5 * (1 + erf(x / Math.SQRT2));
-const loc = (g, id) => g.neutral ? 0 : (g.home === id ? HFA : -HFA);
+const mean = v => v.reduce((a, b) => a + b, 0) / v.length;
+const sdev = v => { const m = mean(v); return Math.sqrt(mean(v.map(x => (x - m) ** 2))); };
 
-// Power rating: margin-of-victory rating from completed games (capped margins, home edge removed).
-const R = (() => {
-  const r = {}, gi = {};
-  [...FBS, 'FCS'].forEach(i => { r[i] = i === 'FCS' ? -20 : 0; gi[i] = []; });
-  GAMES.filter(g => g.final).forEach(g => { gi[g.home].push(g); gi[g.away].push(g); });
-  for (let it = 0; it < 300; it++) for (const i in r) {
-    let s = 0, n = 0;
-    for (const g of gi[i]) {
-      const me = g.home === i, opp = me ? g.away : g.home;
-      const m = Math.max(-CAP, Math.min(CAP, me ? g.hs - g.as : g.as - g.hs));
-      s += m - loc(g, i) + r[opp]; n++;
-    }
-    r[i] = (s + PRIOR_N * (i === 'FCS' ? -20 : 0)) / (n + PRIOR_N);
-  }
-  return r;
-})();
+// Ratings: ESPN FPI and Sagarin PREDICTOR, both as points better than an average FBS team on a neutral field.
+// Sagarin also rates FCS teams; FPI doesn't, so FCS opponents get FPI-equivalents scaled from Sagarin.
+const RT = D.ratings;
+const sagFBS = FBS.map(i => T[i].sag), fpiFBS = FBS.map(i => T[i].fpi);
+const SAG_MEAN = mean(sagFBS), SAG_TO_FPI = sdev(fpiFBS) / sdev(sagFBS);
+const fcsSags = GAMES.filter(g => g.fcsSag != null).map(g => g.fcsSag).sort((a, b) => a - b);
+const FCS_SAG = fcsSags.length ? fcsSags[fcsSags.length >> 1] : SAG_MEAN - 30;
+const SOURCES = {
+  blend: { label: 'FPI + Sagarin blend', hfa: (RT.fpiHfa + RT.sagHfa) / 2 },
+  fpi: { label: 'ESPN FPI', hfa: RT.fpiHfa },
+  sag: { label: 'Sagarin', hfa: RT.sagHfa },
+};
+function rateFrom(src, fpi, sagPts) { return src === 'fpi' ? fpi : src === 'sag' ? sagPts : (fpi + sagPts) / 2; }
+let R, HFA, BASE, zPow, FCS_R;
+function setSource(src) {
+  if (!SOURCES[src]) src = 'blend';
+  S.src = src; HFA = SOURCES[src].hfa; R = {};
+  FBS.forEach(i => R[i] = rateFrom(src, T[i].fpi, T[i].sag - SAG_MEAN));
+  FCS_R = g => { const s = (g.fcsSag ?? FCS_SAG) - SAG_MEAN; return rateFrom(src, s * SAG_TO_FPI, s); };
+  const order = [...FBS].sort((a, b) => R[b] - R[a]);
+  BASE = R[order[11]]; // a typical playoff-caliber team
+  const m = mean(FBS.map(i => R[i])), sd = sdev(FBS.map(i => R[i]));
+  zPow = Object.fromEntries(FBS.map(i => [i, (R[i] - m) / sd]));
+}
+const rOf = (id, g) => T[id] ? R[id] : FCS_R(g);
+const loc = (g, id) => g.neutral ? 0 : (g.home === id ? HFA : -HFA);
 const pWin = (a, b, edge = 0) => Phi((R[a] - R[b] + edge) / SD);
-const pHome = g => pWin(g.home, g.away, loc(g, g.home));
-const powerOrder = [...FBS].sort((a, b) => R[b] - R[a]);
-const BASE = R[powerOrder[11]]; // a typical playoff-caliber team
-const zPow = (() => { const v = FBS.map(i => R[i]); const m = v.reduce((a, b) => a + b) / v.length;
-  const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length); return Object.fromEntries(FBS.map(i => [i, (R[i] - m) / sd])); })();
+const pHome = g => Phi((rOf(g.home, g) - rOf(g.away, g) + loc(g, g.home)) / SD);
+const spreadFor = (src, a, b, g) => {
+  const r = id => T[id] ? rateFrom(src, T[id].fpi, T[id].sag - SAG_MEAN) : (s => rateFrom(src, s * SAG_TO_FPI, s))((g.fcsSag ?? FCS_SAG) - SAG_MEAN);
+  return r(a) - r(b) + (g.neutral ? 0 : (g.home === a ? 1 : -1) * SOURCES[src].hfa);
+};
+setSource(S.src);
 
 // ---------- season engine ----------
 const pct = (w, l) => (w + l) ? w / (w + l) : 0;
@@ -223,7 +237,7 @@ function addResult(rec, g, homeWon, isConf) {
     const won = side === 'home' ? homeWon : !homeWon, opp = side === 'home' ? g.away : g.home;
     const r = rec[id]; won ? r.w++ : r.l++;
     if (isConf) won ? r.cw++ : r.cl++;
-    r.res.push({ opp, won, loc: loc(g, id) });
+    r.res.push({ opp, won, loc: loc(g, id), oppR: rOf(opp, g) });
   }
 }
 function decide(a, b, edge, pickId, mode, rng) {
@@ -274,13 +288,13 @@ function runSeason(mode, rng, w) {
   }
   // committee-style ranking: blend of power rating and strength of record
   const sor = {};
-  FBS.forEach(i => { let s = 0; for (const r of rec[i].res) s += (r.won ? 1 : 0) - Phi((BASE - R[r.opp] + r.loc) / SD); sor[i] = s; });
-  const sv = FBS.map(i => sor[i]), sm = sv.reduce((a, b) => a + b) / sv.length;
-  const ssd = Math.sqrt(sv.reduce((a, b) => a + (b - sm) ** 2, 0) / sv.length) || 1;
+  FBS.forEach(i => { let s = 0; for (const r of rec[i].res) s += (r.won ? 1 : 0) - Phi((BASE - r.oppR + r.loc) / SD); sor[i] = s; });
+  const sv = FBS.map(i => sor[i]), sm = mean(sv), ssd = sdev(sv) || 1;
   const champSet = new Set(Object.values(champs)), wp = w / 100;
   const score = {};
   FBS.forEach(i => score[i] = wp * zPow[i] + (1 - wp) * (sor[i] - sm) / ssd + (champSet.has(i) ? 0.15 : 0));
   const ranked = [...FBS].sort((a, b) => score[b] - score[a]);
+  const h2h = S.h2h ? applyHeadToHead(ranked, rec, score) : {};
   const rk = {}; ranked.forEach((id, i) => rk[id] = i + 1);
   // 12-team field: five highest-ranked conference champions + seven at-large, seeded straight by ranking
   const auto = [...champSet].sort((a, b) => rk[a] - rk[b]).slice(0, 5);
@@ -288,7 +302,36 @@ function runSeason(mode, rng, w) {
   for (const id of ranked) { if (field.size >= 12) break; field.add(id); }
   const seeds = [...field].sort((a, b) => rk[a] - rk[b]);
   const bracket = playBracket(seeds, mode, rng);
-  return { rec, st, ccg, champs, champSet, sor, score, ranked, rk, auto: new Set(auto), seeds, bracket };
+  return { rec, st, ccg, champs, champSet, sor, score, ranked, rk, h2h, auto: new Set(auto), seeds, bracket };
+}
+// The committee uses head-to-head to separate comparable teams: a team that beat a higher-ranked team
+// moves directly ahead of it when it has no more losses and the two are close on the scorecard.
+// Edits `ranked` in place; returns { winner: loser } for each jump made.
+function applyHeadToHead(ranked, rec, score) {
+  const beat = {};
+  FBS.forEach(i => {
+    const w = new Set(), l = new Set();
+    rec[i].res.forEach(r => (r.won ? w : l).add(r.opp));
+    beat[i] = new Set([...w].filter(o => !l.has(o))); // a split season series doesn't count
+  });
+  const moved = {};
+  const top = Math.min(ranked.length, 40);
+  for (let pass = 0; pass < 25; pass++) {
+    let changed = false;
+    outer: for (let i = 0; i < top; i++) for (let j = i + 1; j < top; j++) {
+      const hi = ranked[i], lo = ranked[j];
+      if (!beat[lo].has(hi) || rec[lo].l > rec[hi].l) continue;
+      // The two must be comparable on the original scorecard
+      if (score[hi] - score[lo] > H2H_GAP) continue;
+      // A three-way loop (hi beat c, c beat lo) cancels head-to-head
+      if ([...beat[hi]].some(c => beat[c]?.has(lo))) continue;
+      {
+        ranked.splice(j, 1); ranked.splice(i, 0, lo); moved[lo] = hi; changed = true; break outer;
+      }
+    }
+    if (!changed) break;
+  }
+  return moved;
 }
 function playBracket(seeds, mode, rng) {
   const s = n => seeds[n - 1], games = {};
@@ -378,8 +421,8 @@ function sideBtn(g, side) {
     if (pick === side) cls += ' picked'; else if (!pick && p >= 0.5) cls += ' proj';
     right = `<span class="p">${fmtPct(p)}</span>`;
   }
-  const dis = g.final || fcs || !T[other] && false;
-  return `<button class="${cls}" type="button" ${g.final || fcs ? 'disabled' : `data-act="pick" data-g="${g.id}" data-s="${side}"`}>
+  const tip = g.final ? '' : ' title="' + ['fpi', 'sag', 'blend'].map(s => `${SOURCES[s].label}: ${fmtPct(Phi(spreadFor(s, id, other, g) / SD))}`).join(' · ') + '"';
+  return `<button class="${cls}" type="button"${tip} ${g.final || fcs ? 'disabled' : `data-act="pick" data-g="${g.id}" data-s="${side}"`}>
     ${chip(id, g.fcsName)}<span class="nm">${rank}${name}${r ? `<small>${recStr(r)}</small>` : ''}</span>${right}</button>`;
 }
 
@@ -405,7 +448,7 @@ function renderPicks() {
       ${sideBtn(g, 'away')}${sideBtn(g, 'home')}</div>`;
   }).join('');
   return `<h2>${q ? `Games matching “${esc(S.q)}”` : `Week ${S.week}`}</h2>
-    <p class="lede">Tap a team to pick it. Percentages come from a power rating built on this season's scores. Records and rankings next to each team update as you pick.</p>
+    <p class="lede">Tap a team to pick it. Win chances come from ${SOURCES[S.src].label === 'FPI + Sagarin blend' ? 'an average of ESPN FPI and Sagarin' : SOURCES[S.src].label}, including home field. Hover a percentage to see each source. Records and rankings next to each team update as you pick.</p>
     <div class="filters"><div class="weeks" role="group" aria-label="Week">${wkBtns}</div>
       <select id="f-conf" aria-label="Conference">${opts}</select>
       <input id="f-q" type="search" placeholder="Find a team's schedule" value="${esc(S.q)}" aria-label="Team search"></div>
@@ -454,6 +497,7 @@ function renderRank() {
   const rows = P.ranked.slice(0, 30).map((id, i) => {
     const r = P.rec[id], tags = [];
     if (P.champSet.has(id)) tags.push('<span class="pill">Champ</span>');
+    if (P.h2h[id]) tags.push(`<span class="pill" title="Moved ahead of ${esc(T[P.h2h[id]].name)} on head-to-head">Beat ${esc(T[P.h2h[id]].abbr)}</span>`);
     const seed = P.seeds.indexOf(id);
     if (seed >= 0) tags.push(`<span class="pill g">${seed < 4 ? 'Bye · ' : ''}Seed ${seed + 1}</span>`);
     return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td><div class="tm">${chip(id)}<span class="nm">${esc(T[id].name)}</span></div></td>
@@ -461,9 +505,10 @@ function renderRank() {
       <td class="n">${sgn(P.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td><td>${tags.join(' ')}</td></tr>`;
   }).join('');
   return `<h2>Projected final committee rankings</h2>
-    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is points better than an average FBS team on a neutral field.</p>
+    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.</p>
     <div class="weigh"><label for="f-w">Committee leans on</label><span class="hint">Résumé</span>
-      <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span></div>
+      <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span>
+      <label class="hint"><input id="f-h2h" type="checkbox"${S.h2h ? ' checked' : ''}> Honor head-to-head</label></div>
     <div class="scroll"><table><thead><tr><th class="n">#</th><th>Team</th><th class="n">Rec</th><th class="hide-sm">Conf</th><th class="n">Résumé</th><th class="n hide-sm">Power</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
@@ -510,7 +555,7 @@ function renderOdds() {
       <td class="n">${fmtPct(c.cfp / n)}</td><td style="width:22%">${bar(c.cfp / n)}</td><td class="n hide-sm">${fmtPct(c.bye / n)}</td><td class="n">${fmtPct(c.title / n)}</td></tr>`;
   }).join('');
   return `<h2>Playoff odds</h2>
-    <p class="lede">${N.toLocaleString()} simulated seasons. Your picks are locked in and every other game is a weighted coin flip based on the power rating, title games and playoff included.</p>
+    <p class="lede">${N.toLocaleString()} simulated seasons. Your picks are locked in and every other game is a weighted coin flip using ${esc(SOURCES[S.src].label)} odds, title games and playoff included.</p>
     <div class="filters"><select id="f-conf" aria-label="Conference">${opts}</select>
       <button class="btn" type="button" data-act="rerun">Run again</button>
       <span class="hint">${ODDS.running ? `Simulating… ${done.toLocaleString()} of ${N.toLocaleString()}` : ODDS.stale ? 'Updating for your new picks…' : `Done · ${done.toLocaleString()} seasons`}</span></div>
@@ -518,9 +563,10 @@ function renderOdds() {
     <div class="scroll"><table><thead><tr><th>Team</th><th class="n">Avg W</th><th class="n hide-sm">Title game</th><th class="n">Conf champ</th><th class="n">Playoff</th><th></th><th class="n hide-sm">Bye</th><th class="n">Natl champ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-const NOTE = `<p class="note">Schedule and scores from ESPN, last pulled ${esc(D.updated)}. The power rating and committee model are this page's own estimates, not ESPN's FPI or the real CFP rankings.</p>`;
+const NOTE = `<p class="note">Schedule, scores and FPI from ESPN; PREDICTOR ratings from <a href="http://sagarin.com/sports/cfsend.htm" target="_blank" rel="noopener">Jeff Sagarin</a> (through ${esc(RT.sagThrough)}). Last pulled ${esc(D.updated)}. Home field is worth ${RT.sagHfa} points for Sagarin, his own figure, and ${RT.fpiHfa} for FPI, an estimate because ESPN doesn't publish one. Win chance assumes a ${SD}-point standard deviation around the spread. The committee rankings are this page's own model, not the real CFP rankings.</p>`;
 function render() {
   renderTabs(); renderTally();
+  document.getElementById('f-src').value = S.src;
   const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, odds: renderOdds }[S.tab] || renderPicks;
   const main = document.getElementById('main');
   const focusId = document.activeElement && document.activeElement.id, selStart = document.activeElement && document.activeElement.selectionStart;
@@ -555,6 +601,8 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'f-conf') { S.conf = e.target.value; save(); render(); }
+  if (e.target.id === 'f-src') { setSource(e.target.value); changed(); }
+  if (e.target.id === 'f-h2h') { S.h2h = e.target.checked; changed(); }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'f-q') { S.q = e.target.value; save(); render(); }

@@ -17,10 +17,10 @@ Picks are saved in your browser.
 
 ## The model
 
-- **Power rating:** an SRS-style margin-of-victory rating from completed games. Margins are capped at 24, home field is worth 2.5 points, and all FCS opponents are pooled into one team.
-- **Win probability:** normal distribution on the rating difference, with SD 13.5 points.
-- **Résumé:** for each game, a win minus the chance a typical playoff team (the #12 power team) would win the same game.
-- **Conference tiebreakers:** head-to-head among the tied teams, then power rating. Each conference's real rules are more detailed.
+- **Win probability:** from [ESPN FPI](https://www.espn.com/college-football/fpi), [Sagarin's PREDICTOR](http://sagarin.com/sports/cfsend.htm), or an average of the two (the default). Pick the source in the app. The spread is the rating difference plus home field (Sagarin's published edge, about 3.8 points; 2.5 points for FPI, an estimate). Win chance is a normal distribution around that spread with a 14-point standard deviation. Sagarin also rates FCS teams, so FCS opponents get real ratings.
+- **Résumé:** for each game, a win minus the chance a typical playoff team (the #12 rated team) would win the same game.
+- **Committee ranking:** a blend of résumé and rating, with a small bonus for conference champions. With head-to-head on, a team that beat a higher-ranked team moves directly ahead of it when it has the same or fewer losses and the two are comparable. Three-way loops cancel out.
+- **Conference tiebreakers:** head-to-head among the tied teams, then rating. Each conference's real rules are more detailed.
 
 ## Updating the data
 
@@ -28,7 +28,7 @@ Picks are saved in your browser.
 python scripts/fetch_data.py
 ```
 
-This pulls the schedule, scores and conference lineups from ESPN's public scoreboard API and rewrites `data/season.js`. The GitHub Action in `.github/workflows/update-data.yml` does this every morning and commits the new data.
+This pulls the schedule, scores, conference lineups and FPI from ESPN, plus Sagarin's ratings, and rewrites `data/season.js`. The GitHub Action in `.github/workflows/update-data.yml` does this every morning and commits the new data.
 
 ## Hosting on GitHub Pages
 
