@@ -13,7 +13,7 @@
 :root {
   --bg: #f2f4ef; --surface: #ffffff; --ink: #17221b; --muted: #5b6a60; --line: #d6ddd3;
   --board: #173f2a; --board-ink: #f2f4ef; --turf: #1f5c3a; --turf-soft: #e2ede5;
-  --pylon: #d85f16; --pylon-soft: #fbe7da; --win: #1d7342; --loss: #a83a2e;
+  --pylon: #d85f16; --pylon-soft: #fbe7da; --win: #1d7342; --loss: #a83a2e; --logo-bg: transparent;
   --display: 'Graduate', 'Rockwell', Georgia, serif;
   --body: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --data: 'Barlow Condensed', 'Arial Narrow', system-ui, sans-serif;
@@ -21,11 +21,11 @@
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --bg: #0e1511; --surface: #152019; --ink: #e5ebe6; --muted: #93a398; --line: #2a3a30;
   --board: #10291b; --board-ink: #e5ebe6; --turf: #63c08a; --turf-soft: #1b3325;
-  --pylon: #f08b47; --pylon-soft: #3a2416; --win: #63c08a; --loss: #e57b6e; color-scheme: dark; } }
+  --pylon: #f08b47; --pylon-soft: #3a2416; --win: #63c08a; --loss: #e57b6e; --logo-bg: #e8ede8; color-scheme: dark; } }
 :root[data-theme="dark"] {
   --bg: #0e1511; --surface: #152019; --ink: #e5ebe6; --muted: #93a398; --line: #2a3a30;
   --board: #10291b; --board-ink: #e5ebe6; --turf: #63c08a; --turf-soft: #1b3325;
-  --pylon: #f08b47; --pylon-soft: #3a2416; --win: #63c08a; --loss: #e57b6e; color-scheme: dark; }
+  --pylon: #f08b47; --pylon-soft: #3a2416; --win: #63c08a; --loss: #e57b6e; --logo-bg: #e8ede8; color-scheme: dark; }
 
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.45; }
@@ -63,6 +63,11 @@ h2 { font-family: var(--data); font-size: 22px; font-weight: 700; letter-spacing
 /* team chip */
 .chip { display: inline-grid; place-items: center; min-width: 46px; height: 24px; padding: 0 5px; border-radius: 4px; background: var(--c); color: var(--ct); font-family: var(--data); font-weight: 700; font-size: 13px; letter-spacing: .03em; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); flex: none; }
 .chip.fcs { background: var(--line); color: var(--muted); }
+.chip img { display: none; width: 24px; height: 24px; object-fit: contain; }
+.chip.logo { background: var(--logo-bg); box-shadow: none; }
+.chip.logo img { display: block; }
+.chip.logo .ab { display: none; }
+.champ .chip.logo, .sheet-head .chip.logo { background: var(--board-ink); }
 .rk { font-family: var(--data); font-size: 12px; color: var(--muted); font-weight: 600; }
 
 /* filters */
@@ -176,6 +181,10 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
 .weigh input { width: min(260px, 60vw); accent-color: var(--pylon); }
 .weigh label { font-weight: 600; }
 .cut td { border-top: 2px dashed var(--pylon); }
+.espn { color: var(--muted); }
+th.espn { color: var(--muted); opacity: .8; }
+.weigh.fit { justify-content: space-between; }
+.weigh.fit > div { max-width: 70ch; }
 
 /* bracket */
 .bracket { display: grid; grid-template-columns: repeat(4, minmax(225px, 1fr)); gap: 14px; min-width: 960px; }
@@ -228,10 +237,10 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
   <dialog class="sheet" id="sheet" aria-label="Team schedule"></dialog>
 </div>
 
-<script src="data/season.js?v=2"></script>
+<script src="data/season.js?v=3"></script>
 <script>
 // A browser can hold an older cached copy of the data file that lacks fields this page needs; fetch a fresh one.
-if (!window.CFB_DATA || !window.CFB_DATA.ratings) document.write('<script src="data/season.js?t=' + Date.now() + '"><\/script>');
+if (!window.CFB_DATA || !window.CFB_DATA.polls) document.write('<script src="data/season.js?t=' + Date.now() + '"><\/script>');
 </script>
 <script>
 const D = window.CFB_DATA;
@@ -569,10 +578,20 @@ function scheduleOdds() { clearTimeout(oddsTimer); if (ODDS) ODDS.stale = true; 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function inkFor(hex) { const n = parseInt(hex || '666666', 16); const r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255;
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#111' : '#fff'; }
+// Team badge: the ESPN logo when it loads, otherwise a badge in team colors with the abbreviation.
+// Where images are blocked (the Claude artifact copy), the logo just never loads and the badge stays.
+const LOGO_OK = new Set();
+const logoUrl = id => `https://a.espncdn.com/combiner/i?img=/i/teamlogos/ncaa/500/${id}.png&w=48&h=48`;
 function chip(id, fcsName) {
   if (!T[id]) return `<span class="chip fcs" title="${esc(fcsName || 'FCS')}">FCS</span>`;
-  const t = T[id]; return `<span class="chip" style="--c:#${esc(t.color)};--ct:${inkFor(t.color)}">${esc(t.abbr)}</span>`;
+  const t = T[id];
+  return `<span class="chip${LOGO_OK.has(id) ? ' logo' : ''}" data-team="${id}" title="${esc(t.name)}" style="--c:#${esc(t.color)};--ct:${inkFor(t.color)}"><img src="${logoUrl(id)}" alt="" decoding="async"><span class="ab">${esc(t.abbr)}</span></span>`;
 }
+document.addEventListener('load', e => {
+  const img = e.target;
+  if (img.tagName !== 'IMG' || !img.parentNode || !img.parentNode.dataset || !img.parentNode.dataset.team) return;
+  LOGO_OK.add(img.parentNode.dataset.team); img.parentNode.classList.add('logo');
+}, true);
 const recStr = (r) => `${r.w}-${r.l}`;
 const fmtPct = p => p >= .995 ? '>99%' : p < .005 ? '<1%' : Math.round(p * 100) + '%';
 const sgn = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(1);
@@ -628,7 +647,7 @@ function sideBtn(g, side) {
 
 function gameCard(g, showWeek) {
   const d = new Date(g.date);
-  const when = g.final ? 'Final' : g.live ? 'Live' : d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' }) + ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const when = g.final ? 'Final' : g.live ? (g.ls ? `Live · ${g.ls[1] ?? 0}–${g.ls[0] ?? 0}` : 'Live') : d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' }) + ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   const extra = [];
   if (showWeek) extra.push('Wk ' + g.week);
   if (g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf && T[g.home].conf !== IND) extra.push(esc(CONF[T[g.home].conf].abbr.toUpperCase()));
@@ -707,12 +726,13 @@ function renderPicks() {
     <div class="games">${rows || '<p class="hint">No games match those filters.</p>'}</div>`;
 }
 
+const playoffPct = id => ODDS && ODDS.done >= 500 ? fmtPct(ODDS.cnt[id].cfp / ODDS.done) : '…';
 function standTable(ids, slots) {
-  return `<div class="scroll"><table><thead><tr><th>Team</th><th class="n">Conf</th><th class="n">All</th><th class="n hide-sm">Power</th><th class="n">Rk</th></tr></thead><tbody>` +
+  return `<div class="scroll"><table><thead><tr><th>Team</th><th class="n">Conf</th><th class="n">All</th><th class="n hide-sm">Power</th><th class="n" title="Playoff chance from the simulations">CFP%</th><th class="n">Rk</th></tr></thead><tbody>` +
     ids.map((id, i) => {
       const r = P.rec[id];
       return `<tr class="${i < slots ? 'ccg' : ''}"><td>${teamCell(id)}</td>
-        <td class="n">${r.cw}-${r.cl}</td><td class="n">${r.w}-${r.l}</td><td class="n hide-sm">${sgn(R[id])}</td><td class="n">${P.rk[id] <= 25 ? P.rk[id] : ''}</td></tr>`;
+        <td class="n">${r.cw}-${r.cl}</td><td class="n">${r.w}-${r.l}</td><td class="n hide-sm">${sgn(R[id])}</td><td class="n">${playoffPct(id)}</td><td class="n">${P.rk[id] <= 25 ? P.rk[id] : ''}</td></tr>`;
     }).join('') + `</tbody></table></div>`;
 }
 function tieNotes(ties) {
@@ -758,6 +778,37 @@ function renderTitle() {
     <div class="cards">${cards}</div>`;
 }
 
+// The real ranking to compare against: CFP committee rankings once released, the AP poll until then.
+const POLLS = D.polls || {};
+const pollKey = POLLS.cfp ? 'cfp' : POLLS.ap ? 'ap' : null;
+const poll = pollKey ? POLLS[pollKey] : null;
+const pollLabel = pollKey === 'cfp' ? 'CFP' : 'AP';
+// Rank teams on results so far (completed games only) at a given power weight, then find the weight whose
+// ranking best matches the real one, measured by the average miss in spots over the real top 25.
+function fitToPoll() {
+  const key = S.src + ':' + pollKey;
+  if (fitToPoll.cache && fitToPoll.cache.key === key) return fitToPoll.cache.val;
+  const sor = {}; FBS.forEach(i => sor[i] = 0);
+  for (const g of GAMES) {
+    if (!g.final) continue;
+    for (const side of ['home', 'away']) {
+      const id = g[side]; if (!T[id]) continue;
+      const opp = side === 'home' ? g.away : g.home, won = side === 'home' ? g.hs > g.as : g.as > g.hs;
+      sor[id] += (won ? 1 : 0) - Phi((BASE - rOf(opp, g) + loc(g, id)) / SD);
+    }
+  }
+  const sv = FBS.map(i => sor[i]), sm = mean(sv), ssd = sdev(sv) || 1;
+  const ranked = Object.entries(poll.ranks).filter(([id]) => T[id]);
+  let best = null;
+  for (let w = 0; w <= 100; w += 5) {
+    const order = [...FBS].sort((a, b) => (w / 100 * zPow[b] + (1 - w / 100) * (sor[b] - sm) / ssd) - (w / 100 * zPow[a] + (1 - w / 100) * (sor[a] - sm) / ssd));
+    const rk = {}; order.forEach((id, i) => rk[id] = i + 1);
+    const miss = mean(ranked.map(([id, r]) => Math.abs(Math.min(rk[id], 40) - r)));
+    if (!best || miss < best.miss - 1e-9) best = { w, miss };
+  }
+  fitToPoll.cache = { key, val: best };
+  return best;
+}
 function renderRank() {
   const rows = P.ranked.slice(0, 30).map((id, i) => {
     const r = P.rec[id], tags = [];
@@ -767,14 +818,20 @@ function renderRank() {
     if (seed >= 0) tags.push(`<span class="pill g">${seed < 4 ? 'Bye · ' : ''}Seed ${seed + 1}</span>`);
     return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td>${teamCell(id)}</td>
       <td class="n">${recStr(r)}</td><td class="hide-sm">${esc(CONF[T[id].conf].abbr.toUpperCase())}</td>
-      <td class="n">${sgn(P.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td><td>${tags.join(' ')}</td></tr>`;
+      <td class="n">${sgn(P.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td><td class="n">${playoffPct(id)}</td>
+      <td class="n espn">${poll && poll.ranks[id] ? poll.ranks[id] : ''}</td><td>${tags.join(' ')}</td></tr>`;
   }).join('');
+  const fit = poll ? fitToPoll() : null;
+  const fitBox = fit ? `<div class="weigh fit"><div><b>${esc(pollLabel)}:</b> the model's ranking of results so far lines up best with the ${esc(pollLabel)} at <b>${fit.w}% power</b>,
+      missing by ${fit.miss.toFixed(1)} spots per team on average.${pollKey === 'ap' ? ' The CFP committee rankings replace the AP poll here once they come out in early November.' : ''}</div>
+      <button class="btn" type="button" data-act="fit-w" data-v="${fit.w}"${fit.w === S.w ? ' disabled' : ''}>${fit.w === S.w ? 'Matched' : 'Match the ' + (pollKey === 'cfp' ? 'committee' : 'AP poll')}</button></div>` : '';
   return `<h2>Projected final committee rankings</h2>
-    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.</p>
+    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.${poll ? ` The gray ${esc(pollLabel)} column is the real ranking today, from the ${esc((poll.headline || poll.name).split(' - ').pop())}.` : ''}</p>
     <div class="weigh"><label for="f-w">Committee leans on</label><span class="hint">Résumé</span>
       <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span>
       <label class="hint"><input id="f-h2h" type="checkbox"${S.h2h ? ' checked' : ''}> Honor head-to-head</label></div>
-    <div class="scroll"><table><thead><tr><th class="n">#</th><th>Team</th><th class="n">Rec</th><th class="hide-sm">Conf</th><th class="n">Résumé</th><th class="n hide-sm">Power</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    ${fitBox}
+    <div class="scroll"><table><thead><tr><th class="n">#</th><th>Team</th><th class="n">Rec</th><th class="hide-sm">Conf</th><th class="n">Résumé</th><th class="n hide-sm">Power</th><th class="n">CFP%</th><th class="n espn">${esc(pollLabel)} now</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderPlayoff() {
@@ -905,6 +962,7 @@ function renderDice() {
     <div class="scroll"><table class="dice"><thead><tr><th>Favorite's chance</th><th class="n">Games</th><th class="n">Flips</th><th class="n">Expected</th><th class="n">Actual</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+const espnPct = (id, k) => T[id].espn && T[id].espn[k] != null ? fmtPct(T[id].espn[k] / 100) : '';
 function renderOdds() {
   if (!ODDS) return '<p class="hint">Starting simulations…</p>';
   const { cnt, done, N } = ODDS, n = Math.max(done, 1);
@@ -916,15 +974,15 @@ function renderOdds() {
     const c = cnt[id];
     return `<tr><td>${teamCell(id)}</td><td class="n">${(c.w / n).toFixed(1)}</td>
       <td class="n hide-sm">${T[id].conf === IND ? '' : fmtPct(c.ccg / n)}</td><td class="n">${T[id].conf === IND ? '' : fmtPct(c.conf / n)}</td>
-      <td class="n">${fmtPct(c.cfp / n)}</td><td style="width:22%">${bar(c.cfp / n)}</td><td class="n hide-sm">${fmtPct(c.bye / n)}</td><td class="n">${fmtPct(c.title / n)}</td></tr>`;
+      <td class="n">${fmtPct(c.cfp / n)}</td><td class="n espn">${espnPct(id, 'probmakeplayoffs')}</td><td style="width:20%">${bar(c.cfp / n)}</td><td class="n hide-sm">${fmtPct(c.bye / n)}</td><td class="n">${fmtPct(c.title / n)}</td><td class="n espn hide-sm">${espnPct(id, 'probwintitle')}</td></tr>`;
   }).join('');
   return `<h2>Playoff odds</h2>
-    <p class="lede">${N.toLocaleString()} simulated seasons. Your picks are locked in and every other game is a weighted coin flip using ${esc(SOURCES[S.src].label)} odds, title games and playoff included.</p>
+    <p class="lede">${N.toLocaleString()} simulated seasons. Your picks are locked in and every other game is a weighted coin flip using ${esc(SOURCES[S.src].label)} odds, title games and playoff included. The gray ESPN columns are ESPN's own FPI simulations for comparison. They don't include your picks.</p>
     <div class="filters"><select id="f-conf" aria-label="Conference">${opts}</select>
       <button class="btn" type="button" data-act="rerun">Run again</button>
       <span class="hint">${ODDS.running ? `Simulating… ${done.toLocaleString()} of ${N.toLocaleString()}` : ODDS.stale ? 'Updating for your new picks…' : `Done · ${done.toLocaleString()} seasons`}</span></div>
     <div class="progress"><b style="width:${(done / N * 100).toFixed(0)}%"></b></div>
-    <div class="scroll"><table><thead><tr><th>Team</th><th class="n">Avg W</th><th class="n hide-sm">Title game</th><th class="n">Conf champ</th><th class="n">Playoff</th><th></th><th class="n hide-sm">Bye</th><th class="n">Natl champ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    <div class="scroll"><table><thead><tr><th>Team</th><th class="n">Avg W</th><th class="n hide-sm">Title game</th><th class="n">Conf champ</th><th class="n">Playoff</th><th class="n espn">ESPN</th><th></th><th class="n hide-sm">Bye</th><th class="n">Natl champ</th><th class="n espn hide-sm">ESPN</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 const NOTE = `<p class="note">Schedule, scores and FPI from ESPN; PREDICTOR ratings from <a href="http://sagarin.com/sports/cfsend.htm" target="_blank" rel="noopener">Jeff Sagarin</a> (through ${esc(RT.sagThrough)}). Last pulled ${esc(D.updated)}. Home field is worth ${RT.sagHfa} points for Sagarin, his own figure, and ${RT.fpiHfa} for FPI, an estimate because ESPN doesn't publish one. Win chance assumes a ${SD}-point standard deviation around the spread. The committee rankings are this page's own model, not the real CFP rankings.</p>`;
@@ -947,6 +1005,7 @@ document.addEventListener('click', e => {
   const a = b.dataset.act;
   if (a === 'team') { openSheet(b.dataset.v); return; }
   if (a === 'close-sheet') { document.getElementById('sheet').close(); return; }
+  if (a === 'fit-w') { S.w = +b.dataset.v; return changed(); }
   if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
   if (a === 'imp-n') { S.impN = +b.dataset.v; save(); render(); return; }
   if (a === 'imp-open') { S.impTeam = b.dataset.v; S.tab = 'impact'; document.getElementById('sheet').close(); save(); render(); window.scrollTo({ top: 0 }); return; }

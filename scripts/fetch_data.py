@@ -78,11 +78,31 @@ def sagarin_lookup(ratings, name):
 def fetch_fpi():
     d = get(f"https://site.web.api.espn.com/apis/fitt/v3/sports/football/college-football/powerindex"
             f"?region=us&lang=en&season={SEASON}&limit=200")
+    names = next(c for c in d["categories"] if c["name"] == "fpi")["names"]
     out = {}
     for t in d["teams"]:
         cat = next(c for c in t["categories"] if c["name"] == "fpi")
-        out[t["team"]["id"]] = round(cat["values"][0], 2)
+        v = dict(zip(names, cat["values"]))
+        out[t["team"]["id"]] = {
+            "fpi": round(v["fpi"], 2),
+            # ESPN's own season simulations, as percentages
+            "espn": {k: round(v[k], 1) for k in ("probmakeplayoffs", "probwinconf", "probwinout", "probwintitle") if k in v}
+                    | {"projW": round(v.get("projectedw", 0), 1), "projL": round(v.get("projectedl", 0), 1)},
+        }
     return out
+
+
+def fetch_polls():
+    """AP poll now; the CFP committee rankings once they're released (ESPN lists them in the same feed)."""
+    d = get(f"{BASE}/site/v2/sports/football/college-football/rankings")
+    polls = {}
+    for r in d.get("rankings", []):
+        name, kind = r.get("name", ""), r.get("type", "")
+        key = "cfp" if kind == "cfp" or "Playoff" in name else "ap" if kind == "ap" else None
+        if key:
+            polls[key] = {"name": name, "headline": r.get("headline", ""), "date": r.get("date", ""),
+                          "ranks": {x["team"]["id"]: x["current"] for x in r.get("ranks", [])}}
+    return polls
 
 
 def fetch_week(week):
@@ -133,6 +153,7 @@ def main():
                 g["hs"], g["as"] = side["home"]["score"], side["away"]["score"]
             elif state == "in":
                 g["live"] = True
+                g["ls"] = [side["home"]["score"], side["away"]["score"]]
             games.append(g)
         print(f"week {week}: {len(games)} games so far")
 
@@ -140,7 +161,10 @@ def main():
     sag_hfa, sag, sag_through = fetch_sagarin()
     missing = []
     for t in teams.values():
-        t["fpi"] = fpi.get(t["id"])
+        f = fpi.get(t["id"]) or {}
+        t["fpi"] = f.get("fpi")
+        if f.get("espn"):
+            t["espn"] = f["espn"]
         t["sag"] = sagarin_lookup(sag, t["name"])
         if t["fpi"] is None or t["sag"] is None:
             missing.append(t["name"])
@@ -156,10 +180,18 @@ def main():
         "season": SEASON,
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "ratings": {"sagHfa": sag_hfa, "fpiHfa": 2.5, "sagThrough": sag_through},
+        "polls": fetch_polls(),
         "conferences": confs, "teams": list(teams.values()),
         "games": sorted(games, key=lambda g: g["date"]),
     }
-    OUT.write_text("window.CFB_DATA = " + json.dumps(data, separators=(",", ":")) + ";\n", encoding="utf-8")
+    text = "window.CFB_DATA = " + json.dumps(data, separators=(",", ":")) + ";\n"
+    # Skip the write when only the timestamp changed, so frequent runs don't make empty commits
+    if OUT.exists():
+        strip = lambda t: re.sub(r'"updated":"[^"]*"', "", t)
+        if strip(OUT.read_text(encoding="utf-8")) == strip(text):
+            print("no changes")
+            return
+    OUT.write_text(text, encoding="utf-8")
     print(f"wrote {OUT} - {len(teams)} teams, {len(games)} games, {sum(g['final'] for g in games)} final")
 
 

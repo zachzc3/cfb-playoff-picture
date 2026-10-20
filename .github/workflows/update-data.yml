@@ -2,11 +2,18 @@ name: Update scores
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # daily, 9:00 UTC
+    - cron: "0 9 * * *"          # daily, 9:00 UTC
+    # Game days: every 30 minutes from 11 a.m. to 3 a.m. Eastern (Saturday 15:00 UTC to Sunday 07:00 UTC)
+    - cron: "*/30 15-23 * * 6"
+    - cron: "*/30 0-7 * * 0"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
 
 jobs:
   update:
