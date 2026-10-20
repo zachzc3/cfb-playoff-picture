@@ -116,6 +116,14 @@ select, input[type="search"] { font: inherit; font-size: 14px; padding: 6px 9px;
 .seg button { border: 0; background: var(--surface); padding: 6px 11px; font-weight: 600; font-size: 13px; cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
 .imp-list { display: grid; gap: 10px; }
+.root { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 8px; }
+.root li { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.root .who { flex: 1; min-width: 0; }
+.root .who .hint b { color: var(--ink); }
+.btn.sm { padding: 4px 10px; font-size: 13px; }
+.btn.on { background: var(--pylon); color: #fff; border-color: var(--pylon); }
+h2 .chip { vertical-align: middle; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; }
 .imp-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) minmax(0, 300px); gap: 12px; align-items: center; }
 .imp-row .n { font-family: var(--data); font-weight: 700; color: var(--muted); text-align: right; font-size: 15px; }
 .imp-row .game { margin: 0; }
@@ -257,10 +265,13 @@ const FBS = D.teams.map(t => t.id);
 const GAMES = D.games;
 const G = Object.fromEntries(GAMES.map(g => [g.id, g]));
 const SD = 14, H2H_GAP = 0.5; // ranking-score units; roughly ten spots near the top
+// Ranking-score cost of each regular-season loss. Fit to the AP poll at mid-October 2026: with it, the model's
+// ranking of results so far misses the poll by about 1.8 spots per team instead of 2.7.
+const LOSS_W = 0.2;
 const STORE = 'cfb-playoff-picture-2026';
 
 // ---------- state ----------
-let S = { picks: {}, ccg: {}, cfp: {}, w: 40, tab: 'picks', week: null, conf: '', q: '', src: 'blend', h2h: true };
+let S = { picks: {}, ccg: {}, cfp: {}, w: 50, tab: 'picks', week: null, conf: '', q: '', src: 'blend', h2h: true };
 try { Object.assign(S, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
 function save() { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} }
 
@@ -545,16 +556,26 @@ function runSeason(mode, rng, w, trace) {
     ccg[c.id] = { a: hi, b: lo, win };
     champs[c.id] = win;
     addResult(rec, { home: hi, away: lo, neutral: true }, win === hi, false);
+    rec[hi].res[rec[hi].res.length - 1].ccg = rec[lo].res[rec[lo].res.length - 1].ccg = true;
   }
-  // committee-style ranking: blend of power rating and strength of record
-  const sor = {};
-  FBS.forEach(i => { let s = 0; for (const r of rec[i].res) s += (r.won ? 1 : 0) - Phi((BASE - r.oppR + r.loc) / SD); sor[i] = s; });
+  // committee-style ranking: blend of power rating and strength of record, less a cost per loss. A conference
+  // title game can only help: the winner banks the win and the champion's bump, and the loser isn't charged.
+  const sor = {}, rl = {};
+  FBS.forEach(i => {
+    let s = 0, l = 0;
+    for (const r of rec[i].res) {
+      if (r.ccg && !r.won) continue;
+      s += (r.won ? 1 : 0) - Phi((BASE - r.oppR + r.loc) / SD);
+      if (!r.won) l++;
+    }
+    sor[i] = s; rl[i] = l;
+  });
   const sv = FBS.map(i => sor[i]), sm = mean(sv), ssd = sdev(sv) || 1;
   const champSet = new Set(Object.values(champs)), wp = w / 100;
   const score = {};
-  FBS.forEach(i => score[i] = wp * zPow[i] + (1 - wp) * (sor[i] - sm) / ssd + (champSet.has(i) ? 0.15 : 0));
+  FBS.forEach(i => score[i] = wp * zPow[i] + (1 - wp) * (sor[i] - sm) / ssd - LOSS_W * rl[i] + (champSet.has(i) ? 0.15 : 0));
   const ranked = [...FBS].sort((a, b) => score[b] - score[a]);
-  const h2h = S.h2h ? applyHeadToHead(ranked, rec, score) : {};
+  const h2h = S.h2h ? applyHeadToHead(ranked, rec, score, rl) : {};
   const rk = {}; ranked.forEach((id, i) => rk[id] = i + 1);
   // 12-team field: five highest-ranked conference champions + seven at-large, seeded straight by ranking
   const auto = [...champSet].sort((a, b) => rk[a] - rk[b]).slice(0, 5);
@@ -562,12 +583,12 @@ function runSeason(mode, rng, w, trace) {
   for (const id of ranked) { if (field.size >= 12) break; field.add(id); }
   const seeds = [...field].sort((a, b) => rk[a] - rk[b]);
   const bracket = playBracket(seeds, mode, rng);
-  return { rec, st, ccg, champs, champSet, sor, score, ranked, rk, h2h, auto: new Set(auto), seeds, bracket };
+  return { rec, st, ccg, champs, champSet, sor, rl, score, ranked, rk, h2h, auto: new Set(auto), seeds, bracket };
 }
 // The committee uses head-to-head to separate comparable teams: a team that beat a higher-ranked team
-// moves directly ahead of it when it has no more losses and the two are close on the scorecard.
-// Edits `ranked` in place; returns { winner: loser } for each jump made.
-function applyHeadToHead(ranked, rec, score) {
+// moves directly ahead of it when it has no more losses (title-game losses aside) and the two are close on the
+// scorecard. Edits `ranked` in place; returns { winner: loser } for each jump made.
+function applyHeadToHead(ranked, rec, score, rl) {
   const beat = {};
   FBS.forEach(i => {
     const w = new Set(), l = new Set();
@@ -580,7 +601,7 @@ function applyHeadToHead(ranked, rec, score) {
     let changed = false;
     outer: for (let i = 0; i < top; i++) for (let j = i + 1; j < top; j++) {
       const hi = ranked[i], lo = ranked[j];
-      if (!beat[lo].has(hi) || rec[lo].l > rec[hi].l) continue;
+      if (!beat[lo].has(hi) || rl[lo] > rl[hi]) continue;
       // The two must be comparable on the original scorecard
       if (score[hi] - score[lo] > H2H_GAP) continue;
       // A three-way loop (hi beat c, c beat lo) cancels head-to-head
@@ -664,8 +685,8 @@ function clearSim() {
 }
 
 // ---------- monte carlo ----------
-// Each simulated season also records who won every open game (`out`) and every team's seed (`seed`, 0 = out),
-// so the page can compare a team's chances in the seasons where a game went one way against the other.
+// Each simulated season also records who won every open game (`out`), every team's seed (`seed`, 0 = out), its
+// regular-season losses (`loss`) and whether it played in or won its title game (`flag`), so the page can compare a team's chances in the seasons where a game went one way against the other.
 const TI = Object.fromEntries(FBS.map((id, i) => [id, i]));
 let ODDS = null, oddsJob = 0;
 function runOdds(N = 4000) {
@@ -676,14 +697,19 @@ function runOdds(N = 4000) {
   const open = GAMES.filter(g => !g.final && !S.picks[g.id]);
   const G = open.length, NT = FBS.length;
   ODDS = { running: true, done: 0, N, cnt, open, G, openIdx: Object.fromEntries(open.map((g, j) => [g.id, j])),
-    out: new Uint8Array(N * G), seed: new Uint8Array(N * NT), cache: new Map() };
+    out: new Uint8Array(N * G), seed: new Uint8Array(N * NT), loss: new Uint8Array(N * NT), flag: new Uint8Array(N * NT), cache: new Map() };
   const O = ODDS;
   const step = () => {
     if (job !== oddsJob) return;
     const t0 = performance.now();
     while (done < N && performance.now() - t0 < 40) {
       const r = runSeason('sim', rng, S.w, O.out.subarray(done * G, (done + 1) * G));
-      for (const c in r.ccg) { cnt[r.ccg[c].a].ccg++; cnt[r.ccg[c].b].ccg++; cnt[r.ccg[c].win].conf++; }
+      const base = done * NT;
+      for (const c in r.ccg) {
+        const m = r.ccg[c]; cnt[m.a].ccg++; cnt[m.b].ccg++; cnt[m.win].conf++;
+        O.flag[base + TI[m.a]] |= 1; O.flag[base + TI[m.b]] |= 1; O.flag[base + TI[m.win]] |= 2; // 1 = title game, 2 = champion
+      }
+      FBS.forEach((i, ti) => O.loss[base + ti] = r.rl[i]);
       r.seeds.forEach((id, i) => { cnt[id].cfp++; if (i < 4) cnt[id].bye++; O.seed[done * NT + TI[id]] = i + 1; });
       cnt[r.bracket.F.win].title++;
       FBS.forEach(i => cnt[i].w += r.rec[i].w);
@@ -691,7 +717,7 @@ function runOdds(N = 4000) {
     }
     O.done = done;
     if (done >= N) { O.running = false; render(); }
-    else if (S.tab === 'odds' || S.tab === 'impact' || S.tab === 'sim') render(); else renderTally();
+    else if (S.tab === 'odds' || S.tab === 'impact' || S.tab === 'team' || S.tab === 'sim') render(); else renderTally();
     if (done < N) setTimeout(step, 0);
   };
   setTimeout(step, 0);
@@ -755,7 +781,7 @@ const sgn = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(1);
 let P; // deterministic projection from picks + favorites
 function project() { P = runSeason('pick', null, S.w); }
 
-const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['impact', 'Big games'], ['sim', 'Simulator'], ['odds', 'Odds']];
+const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['team', 'Team'], ['impact', 'Big games'], ['sim', 'Simulator'], ['odds', 'Odds']];
 function renderTabs() {
   document.getElementById('tabs').innerHTML = TABS.map(([k, l]) =>
     `<button class="tab" role="tab" type="button" data-act="tab" data-v="${k}" aria-selected="${S.tab === k}">${l}</button>`).join('');
@@ -851,7 +877,7 @@ function sheetImpact(id) {
   if (!rows) return '';
   return `<h2 style="margin-top:8px">Games that move its playoff chances</h2>
     <div class="imp-list">${rows}</div>
-    <div><button class="btn" type="button" data-act="imp-open" data-v="${id}">See the top 25, and bye chances</button></div>`;
+    <div class="btns"><button class="btn" type="button" data-act="team-open" data-v="${id}">Open the team page</button><button class="btn" type="button" data-act="imp-open" data-v="${id}">See the top 25, and bye chances</button></div>`;
 }
 function openSheet(id) {
   S.team = id; const dlg = document.getElementById('sheet');
@@ -955,20 +981,22 @@ const pollLabel = pollKey === 'cfp' ? 'CFP' : 'AP';
 function fitToPoll() {
   const key = S.src + ':' + pollKey;
   if (fitToPoll.cache && fitToPoll.cache.key === key) return fitToPoll.cache.val;
-  const sor = {}; FBS.forEach(i => sor[i] = 0);
+  const sor = {}, ls = {}; FBS.forEach(i => { sor[i] = 0; ls[i] = 0; });
   for (const g of GAMES) {
     if (!g.final) continue;
     for (const side of ['home', 'away']) {
       const id = g[side]; if (!T[id]) continue;
       const opp = side === 'home' ? g.away : g.home, won = side === 'home' ? g.hs > g.as : g.as > g.hs;
       sor[id] += (won ? 1 : 0) - Phi((BASE - rOf(opp, g) + loc(g, id)) / SD);
+      if (!won) ls[id]++;
     }
   }
   const sv = FBS.map(i => sor[i]), sm = mean(sv), ssd = sdev(sv) || 1;
   const ranked = Object.entries(poll.ranks).filter(([id]) => T[id]);
   let best = null;
   for (let w = 0; w <= 100; w += 5) {
-    const order = [...FBS].sort((a, b) => (w / 100 * zPow[b] + (1 - w / 100) * (sor[b] - sm) / ssd) - (w / 100 * zPow[a] + (1 - w / 100) * (sor[a] - sm) / ssd));
+    const sc = i => w / 100 * zPow[i] + (1 - w / 100) * (sor[i] - sm) / ssd - LOSS_W * ls[i];
+    const order = [...FBS].sort((a, b) => sc(b) - sc(a));
     const rk = {}; order.forEach((id, i) => rk[id] = i + 1);
     const miss = mean(ranked.map(([id, r]) => Math.abs(Math.min(rk[id], 40) - r)));
     if (!best || miss < best.miss - 1e-9) best = { w, miss };
@@ -993,7 +1021,7 @@ function renderRank() {
       missing by ${fit.miss.toFixed(1)} spots per team on average.${pollKey === 'ap' ? ' The CFP committee rankings replace the AP poll here once they come out in early November.' : ''}</div>
       <button class="btn" type="button" data-act="fit-w" data-v="${fit.w}"${fit.w === S.w ? ' disabled' : ''}>${fit.w === S.w ? 'Matched' : 'Match the ' + (pollKey === 'cfp' ? 'committee' : 'AP poll')}</button></div>` : '';
   return `<h2>Projected final committee rankings</h2>
-    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.${poll ? ` The gray ${esc(pollLabel)} column is the real ranking today, from the ${esc((poll.headline || poll.name).split(' - ').pop())}.` : ''}</p>
+    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. Each regular-season loss also costs a set amount on top of what it does to the résumé, since the committee sorts heavily by losses. A conference title game can only help: the winner gets credit, and the loser isn't charged for the loss, the way the committee has treated title-game losers. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.${poll ? ` The gray ${esc(pollLabel)} column is the real ranking today, from the ${esc((poll.headline || poll.name).split(' - ').pop())}.` : ''}</p>
     <div class="weigh"><label for="f-w">Committee leans on</label><span class="hint">Résumé</span>
       <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span>
       <label class="hint"><input id="f-h2h" type="checkbox"${S.h2h ? ' checked' : ''}> Honor head-to-head</label></div>
@@ -1056,6 +1084,69 @@ function renderImpact() {
   const rows = impactRows(id, metric, limit, now);
   return head + `<div class="imp-list">${rows || `<p class="hint">No open game moves this much. ${esc(T[id].name)}'s ${metric === 'bye' ? 'bye chances are' : 'playoff chances are'} settled at ${fmtPct(now)}, or your picks have locked in every game that mattered.</p>`}</div>
     <p class="note">Estimates from ${ODDS.done.toLocaleString()} simulated seasons. Games are ranked by how confident the swing is, not just its size, so a big upset that only came up a few times can't jump the list on luck, and games whose effect could be noise are left off.</p>`;
+}
+
+// ---------- team page ----------
+const NG = {}; FBS.forEach(i => NG[i] = 0); GAMES.forEach(g => { if (T[g.home]) NG[g.home]++; if (T[g.away]) NG[g.away]++; });
+// From the simulations: how often the team finishes the regular season with each number of losses, and its
+// playoff and bye chances in those seasons, split by whether it also won its conference.
+function recordPaths(id) {
+  const O = ODDS, NT = FBS.length, ti = TI[id], n = O.done, rows = {};
+  for (let k = 0; k < n; k++) {
+    const l = O.loss[k * NT + ti], sd = O.seed[k * NT + ti], f = O.flag[k * NT + ti];
+    const r = rows[l] ||= { l, n: 0, cfp: 0, bye: 0, champ: 0, champIn: 0, notChamp: 0, notIn: 0 };
+    r.n++; if (sd) r.cfp++; if (sd && sd <= 4) r.bye++;
+    if (f & 2) { r.champ++; if (sd) r.champIn++; } else { r.notChamp++; if (sd) r.notIn++; }
+  }
+  return Object.values(rows).sort((a, b) => a.l - b.l).map(r => ({ ...r, share: r.n / n }));
+}
+function rootRow(r, id) {
+  const g = r.g, fan = r.home >= r.away ? 'home' : 'away';
+  const want = g[fan], other = g[fan === 'home' ? 'away' : 'home'];
+  const hi = Math.max(r.home, r.away), lo = Math.min(r.home, r.away), picked = S.picks[g.id] === fan;
+  return `<li>${chip(want, g.fcsName)}<div class="who"><b>Root for ${esc(teamName(want, g))}</b> <span class="hint">${fan === 'home' ? 'vs.' : 'at'} ${esc(teamName(other, g))} · Wk ${g.week}</span>
+      <div class="hint">${esc(T[id].abbr)} playoff chance <b>${fmtPct(hi)}</b> if they win, <b>${fmtPct(lo)}</b> if they lose</div></div>
+    ${T[want] ? `<button class="btn sm${picked ? ' on' : ''}" type="button" data-act="pick" data-g="${g.id}" data-s="${fan}">${picked ? 'Picked' : 'Pick'}</button>` : ''}</li>`;
+}
+function renderTeam() {
+  if (!T[S.impTeam]) S.impTeam = P.seeds[0];
+  const id = S.impTeam, t = T[id], r = P.rec[id], isInd = t.conf === IND, cf = CONF[t.conf];
+  const opts = [...FBS].sort((a, b) => T[a].name.localeCompare(T[b].name)).map(x => `<option value="${x}"${x === id ? ' selected' : ''}>${esc(T[x].name)}</option>`).join('');
+  let pos = '', where = '';
+  if (!isInd) {
+    const gr = P.st[t.conf].find(g => g.ids.includes(id));
+    pos = ordinal(gr.ids.indexOf(id) + 1); where = 'in the ' + (gr.div ? cf.abbr.toUpperCase() + ' ' + gr.div : cf.name.replace(' Conference', ''));
+  }
+  const seed = P.seeds.indexOf(id);
+  const ready = oddsReady(), O = ODDS, n = ready ? O.done : 1, c = ready ? O.cnt[id] : null;
+  const tile = (v, label) => `<div class="tile"><b>${v}</b><span>${label}</span></div>`;
+  const head = `<h2>${chip(id)} ${esc(t.name)} ${esc(t.mascot)}</h2>
+    <div class="imp-head"><select id="f-team" aria-label="Team">${opts}</select>
+      <span class="hint">${esc(isInd ? 'Independent' : cf.name.replace(' Conference', ''))} · ${esc(SOURCES[S.src].label)} ${sgn(R[id])}</span></div>
+    <div class="tiles">
+      ${tile(recStr(r), 'projected record' + (isInd ? '' : `, ${r.cw}-${r.cl} in conference`))}
+      ${isInd ? '' : tile(pos, 'projected finish ' + esc(where))}
+      ${tile('#' + P.rk[id], seed >= 0 ? `projected rank, seed ${seed + 1}${P.auto.has(id) ? ' (auto bid)' : ''}` : 'projected rank, out of the field')}
+      ${ready ? tile(fmtPct(c.cfp / n), 'make the playoff') + tile(fmtPct(c.bye / n), 'first-round bye') + (isInd ? '' : tile(fmtPct(c.conf / n), 'win the conference')) + tile(fmtPct(c.title / n), 'win the national title') + tile((c.w / n).toFixed(1), 'average wins') : ''}
+    </div>`;
+  if (!ready) return head + `<p class="hint">Simulating seasons… ${ODDS ? ODDS.done.toLocaleString() : 0} of ${ODDS ? ODDS.N.toLocaleString() : ''}</p>`;
+  // What each regular-season record is worth
+  const paths = recordPaths(id).filter(p => p.share >= 0.005);
+  const ng = NG[id], cell = (k, d) => d >= 20 ? fmtPct(k / d) : '–';
+  const pathRows = paths.map(p => `<tr><td class="n">${ng - p.l}-${p.l}</td><td style="width:22%"><div class="bar o" title="${(p.share * 100).toFixed(1)}%"><b style="width:${(p.share * 100).toFixed(1)}%"></b></div></td><td class="n">${fmtPct(p.share)}</td>
+    <td class="n"><b>${fmtPct(p.cfp / p.n)}</b></td><td class="n">${fmtPct(p.bye / p.n)}</td>${isInd ? '' : `<td class="n">${cell(p.champIn, p.champ)}</td><td class="n">${cell(p.notIn, p.notChamp)}</td>`}</tr>`).join('');
+  const pathTable = `<h2>What each record is worth</h2>
+    <p class="lede">The regular-season records ${esc(t.name)} finished with across ${O.done.toLocaleString()} simulated seasons, how often each happened, and how often it was enough.${isInd ? '' : ' The last two columns split those seasons by whether it also won its conference. A dash means too few seasons to say.'}</p>
+    <div class="scroll"><table><thead><tr><th class="n">Record</th><th></th><th class="n">How often</th><th class="n">Playoff</th><th class="n">Bye</th>${isInd ? '' : '<th class="n">If champ</th><th class="n">If not</th>'}</tr></thead><tbody>${pathRows}</tbody></table></div>`;
+  // Its remaining games, then other games to root for
+  const left = GAMES.filter(g => (g.home === id || g.away === id) && !g.final);
+  const own = `<h2>Games left</h2>${left.length ? `<p class="lede">Under each team: ${esc(t.name)}'s playoff chance with a win and with a loss. Tap a team to pick it.</p><div class="games">${left.map(g => gameCard(g, true)).join('')}</div>` : '<p class="hint">Its regular season is over.</p>'}`;
+  const others = topImpact(id, 'cfp', 60).filter(x => x.g.home !== id && x.g.away !== id).slice(0, 10);
+  const root = `<h2>Other games to root for</h2>
+    ${others.length ? `<p class="lede">The games ${esc(t.name)} isn't playing in that move its playoff chances the most, and the result to cheer for. Pick one to lock it in.</p><ul class="root">${others.map(x => rootRow(x, id)).join('')}</ul>`
+      : '<p class="hint">No other open game moves its playoff chances by much.</p>'}
+    <div><button class="btn" type="button" data-act="imp-open" data-v="${id}">See every big game, and bye chances</button></div>`;
+  return head + pathTable + own + root + `<p class="note">Odds from ${O.done.toLocaleString()} simulated seasons with your picks locked in. Each season's rankings use this page's committee model.</p>`;
 }
 
 function renderSim() {
@@ -1158,7 +1249,7 @@ function render() {
   document.getElementById('f-src').value = S.src;
   const dlg = document.getElementById('sheet');
   if (dlg.open && T[S.team]) { const y = dlg.scrollTop; dlg.innerHTML = renderSheet(); dlg.scrollTop = y; }
-  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, impact: renderImpact, sim: renderSim, odds: renderOdds }[S.tab] || renderPicks;
+  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, team: renderTeam, impact: renderImpact, sim: renderSim, odds: renderOdds }[S.tab] || renderPicks;
   const main = document.getElementById('main');
   const focusId = document.activeElement && document.activeElement.id, selStart = document.activeElement && document.activeElement.selectionStart;
   main.innerHTML = f() + NOTE;
@@ -1175,6 +1266,7 @@ document.addEventListener('click', e => {
   if (a === 'fit-w') { S.w = +b.dataset.v; return changed(); }
   if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
   if (a === 'imp-n') { S.impN = +b.dataset.v; save(); render(); return; }
+  if (a === 'team-open') { S.impTeam = b.dataset.v; S.tab = 'team'; document.getElementById('sheet').close(); save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'imp-open') { S.impTeam = b.dataset.v; S.tab = 'impact'; document.getElementById('sheet').close(); save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'tab') { S.tab = b.dataset.v; save(); render(); window.scrollTo({ top: 0 }); return; }
   if (a === 'week') { S.week = +b.dataset.v; S.q = ''; save(); render(); return; }
@@ -1199,6 +1291,7 @@ document.addEventListener('toggle', e => {
 }, true);
 document.addEventListener('change', e => {
   if (e.target.id === 'f-conf') { S.conf = e.target.value; save(); render(); }
+  if (e.target.id === 'f-team') { S.impTeam = e.target.value; save(); render(); }
   if (e.target.id === 'f-imp-team') { S.impTeam = e.target.value; save(); render(); }
   if (e.target.id === 'f-src') { setSource(e.target.value); changed(); }
   if (e.target.id === 'f-h2h') { S.h2h = e.target.checked; changed(); }
