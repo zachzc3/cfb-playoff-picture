@@ -159,6 +159,12 @@ tr.ccg td:first-child { box-shadow: inset 3px 0 0 var(--pylon); }
 .rules summary { cursor: pointer; font-weight: 700; }
 .rules ol { display: grid; gap: 5px; padding-left: 22px; }
 .rules p { margin: 8px 0; }
+.tb { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 13px; }
+.tb summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+.tb h5 { margin: 10px 0 4px; font-family: var(--data); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.tb ol { display: grid; gap: 4px; padding-left: 20px; margin: 0; }
+.tb p { margin: 8px 0 0; }
+.tb a { color: inherit; text-underline-offset: 2px; }
 /* team schedule sheet */
 dialog.sheet { width: min(820px, calc(100vw - 32px)); max-height: 88vh; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); }
 dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
@@ -316,50 +322,201 @@ function decide(a, b, edge, pickId, mode, rng) {
   if (mode === 'sim') return rng() < p ? a : b;
   return p >= 0.5 ? a : b;
 }
-// Conference tiebreakers, in the order the FBS conferences broadly share. Each step returns a value per team
-// (higher is better). When a step separates a tied group, the teams it put on top and the rest are each
-// re-run from step 1, which is how the conferences handle multi-team ties.
+// ---------- conference tiebreakers ----------
+// Each conference breaks ties with its own published procedure (CONF_TB). A step returns a value per tied team
+// (higher is better). When a step separates a tied group, the teams it put on top and the rest each start over
+// with the two-team or multi-team steps, whichever fits the smaller group. Conferences whose rules move a narrowed
+// group of three or more on to the next step (cont) carry the top group on instead of restarting it.
 const confPct = (rec, i) => pct(rec[i].cw, rec[i].cl);
+const MEMBERS = {}; FBS.forEach(i => (MEMBERS[T[i].conf] ||= []).push(i));
 function vsSet(rec, t, set) { let w = 0, l = 0; for (const r of rec[t].res) if (r.conf && set.has(r.opp)) r.won ? w++ : l++; return pct(w, l); }
 function commonOpps(rec, grp) {
   const inGrp = new Set(grp);
   const sets = grp.map(t => new Set(rec[t].res.filter(r => r.conf && !inGrp.has(r.opp)).map(r => r.opp)));
   return [...sets[0]].filter(o => sets.every(s => s.has(o)));
 }
-const TIEBREAKERS = [
-  { name: 'Head-to-head', about: 'Record in games between the tied teams.',
-    fn: (rec, grp) => { const set = new Set(grp); return grp.map(t => vsSet(rec, t, set)); } },
-  { name: 'Common opponents', about: 'Record against conference opponents that all the tied teams played.',
-    fn: (rec, grp) => { const set = new Set(commonOpps(rec, grp)); return grp.map(t => vsSet(rec, t, set)); } },
-  { name: 'Best common opponent', about: 'Record against the highest-placed common opponent, then the next one down, until the tie breaks.',
-    fn: (rec, grp) => {
-      const opps = commonOpps(rec, grp).sort((a, b) => confPct(rec, b) - confPct(rec, a));
-      for (const o of opps) { const v = grp.map(t => vsSet(rec, t, new Set([o]))); if (Math.max(...v) !== Math.min(...v)) return v; }
-      return grp.map(() => 0);
-    } },
-  { name: 'Strength of schedule', about: 'Combined conference winning percentage of each team\'s conference opponents.',
-    fn: (rec, grp) => grp.map(t => { const os = rec[t].res.filter(r => r.conf); return os.length ? mean(os.map(r => confPct(rec, r.opp))) : 0; }) },
-  { name: 'Team rating', about: 'The rating chosen under "Win % from". The Power Four use the SportSource Analytics team rating score here, and several other conferences use a composite of computer rankings.',
-    fn: (rec, grp) => grp.map(t => R[t]) },
-];
-function breakTie(rec, grp, log) {
+const played = (rec, a, b) => rec[a].res.some(r => r.conf && r.opp === b);
+const roundRobin = (rec, grp) => grp.every(a => grp.every(b => a === b || played(rec, a, b)));
+const beat = (rec, a, b) => played(rec, a, b) && vsSet(rec, a, new Set([b])) === 1;
+const zeros = grp => grp.map(() => 0);
+const H2H = { name: 'Head-to-head', about: 'Result of the game between the two teams. If they didn\'t play, go to the next step.',
+  fn: (rec, grp) => { const s = new Set(grp); return grp.map(t => vsSet(rec, t, s)); } };
+const H2H_ALL = { ...H2H, about: 'Combined record in games among the tied teams.' };
+// Multi-team head-to-head. always: combined record among the tied teams, played or not. Otherwise that needs a
+// complete round robin; without one, a team that beat all the others goes ahead (sweep) and a team that lost to
+// all the others drops out (loser).
+function h2hGroup(o = {}) {
+  if (o.always) return H2H_ALL;
+  const about = 'If all the tied teams played each other, their combined record in those games. ' + (
+    o.sweep && o.loser ? 'If not, a team that beat all the others goes ahead, and a team that lost to all the others drops out.'
+    : o.sweep ? 'If not, a team that beat all the others goes ahead; otherwise go to the next step.'
+    : 'If not, go to the next step.');
+  return { name: 'Head-to-head', about, fn: (rec, grp) => {
+    const s = new Set(grp);
+    if (roundRobin(rec, grp)) return grp.map(t => vsSet(rec, t, s));
+    return grp.map(t => {
+      const others = grp.filter(x => x !== t);
+      if (o.sweep && others.every(x => beat(rec, t, x))) return 1;
+      if (o.loser && others.every(x => beat(rec, x, t))) return -1;
+      return 0;
+    });
+  } };
+}
+const COMMON = { name: 'Common opponents', about: 'Record against the conference opponents that all the tied teams played.',
+  fn: (rec, grp) => { const set = new Set(commonOpps(rec, grp)); return grp.map(t => vsSet(rec, t, set)); } };
+// Record against the best-placed opponent, then down the standings, treating opponents tied in the standings as one
+// group. Default: common opponents only. div: the rest of the division (Sun Belt). whole: any conference team, but a
+// group some tied team didn't fully play is skipped (Mountain West).
+function walkDown(o = {}) {
+  const about = o.div ? 'Record against the next-highest team in the division standings, working down. Teams tied in the standings count as one group.'
+    : o.whole ? 'Record against the next-highest team in the conference standings, working down. Teams tied in the standings count as one group, and a team or group that not every tied team played is skipped.'
+    : 'Record against the best-placed common opponent, then the next one down the standings. Opponents tied in the standings count as one group' + (o.broken ? ' here; the MAC breaks those ties first.' : '.');
+  return { name: o.div ? 'Next-highest division team' : o.whole ? 'Next-highest team' : 'Best common opponent', about, fn: (rec, grp) => {
+    const inG = new Set(grp), c = T[grp[0]].conf;
+    const pool = o.div ? MEMBERS[c].filter(x => T[x].div === T[grp[0]].div && !inG.has(x))
+      : o.whole ? MEMBERS[c].filter(x => !inG.has(x)) : commonOpps(rec, grp);
+    const order = pool.sort((a, b) => confPct(rec, b) - confPct(rec, a));
+    for (let i = 0; i < order.length;) {
+      let j = i; while (j < order.length && confPct(rec, order[j]) === confPct(rec, order[i])) j++;
+      const tier = order.slice(i, j); i = j;
+      if (o.whole && !grp.every(t => tier.every(x => played(rec, t, x)))) continue;
+      const set = new Set(tier), v = grp.map(t => vsSet(rec, t, set));
+      if (Math.max(...v) !== Math.min(...v)) return v;
+    }
+    return zeros(grp);
+  } };
+}
+const SOS = { name: 'Strength of schedule', about: 'Combined conference winning percentage of each team\'s conference opponents.',
+  fn: (rec, grp) => grp.map(t => { const os = rec[t].res.filter(r => r.conf); return os.length ? mean(os.map(r => confPct(rec, r.opp))) : 0; }) };
+const DIV_PCT = { name: 'Division record', about: 'Winning percentage against division opponents.',
+  fn: (rec, grp) => grp.map(t => { let w = 0, l = 0; for (const r of rec[t].res) if (r.conf && T[r.opp].div === T[t].div) r.won ? w++ : l++; return pct(w, l); }) };
+const NONDIV_COMMON = { name: 'Common non-division opponents', about: 'Record against the conference opponents from the other division that all the tied teams played.',
+  fn: (rec, grp) => { const set = new Set(commonOpps(rec, grp).filter(o => T[o].div !== T[grp[0]].div)); return grp.map(t => vsSet(rec, t, set)); } };
+// Overall record. fcs1: at most one win over an FCS team counts. fbs: FBS games only. wins: count wins, not percentage.
+function overall(name, about, o = {}) {
+  return { name, about, fn: (rec, grp) => grp.map(t => {
+    let w = 0, l = 0, fcsW = 0;
+    for (const r of rec[t].res) {
+      const fcs = !T[r.opp];
+      if (fcs && o.fbs) continue;
+      if (r.won) { if (fcs && o.fcs1 && fcsW++) continue; w++; } else l++;
+    }
+    return o.wins ? w : pct(w, l);
+  }) };
+}
+// Metrics the app can't reproduce. The team rating chosen under "Win % from" stands in for each.
+const STAND_IN = ' The app can\'t calculate this, so the team rating chosen under "Win % from" stands in.';
+const approx = (name, about) => ({ name, about: about + STAND_IN, approx: true, fn: (rec, grp) => grp.map(t => R[t]) });
+const SPORTSOURCE = approx('SportSource rating', 'Higher SportSource Analytics team Rating Score after the regular season.');
+const SSR = approx('SportSource Team Success Ranking', 'Better SportSource Analytics Team Success Ranking after the regular season.');
+const cfpOrComputers = list => approx('CFP ranking or computer composite', `A tied team ranked in the latest CFP rankings goes ahead if it wins its last regular-season game, the higher-ranked one if more than one does. Otherwise the best average of selected computer rankings (${list}) decides.`);
+const last = name => ({ name, about: 'Last resort. It never comes up here because ratings always differ.', fn: zeros });
+const OVERALL = overall('Overall record', 'Winning percentage in all games.');
+const OVERALL_FCS1 = overall('Overall record', 'Winning percentage in all games, counting at most one win over an FCS team.', { fcs1: true });
+const VS_FBS = overall('Record vs. FBS', 'Winning percentage in all games against FBS teams.', { fbs: true });
+const AAC_MIX = 'Connelly SP+, SportSource TR116 SOR, ESPN SOR, KPI';
+const SBC_MIX = 'Anderson & Hester, Massey, Colley, Wolfe';
+const MW_MIX = 'Connelly SP+, ESPN SOR, KPI, SportSource';
+
+// The order most FBS conferences share, for a conference whose own procedure isn't available
+const GENERIC_TB = { generic: true, two: [H2H, COMMON, walkDown(), SOS, approx('Team rating', 'Higher team rating.'), last('Coin flip')] };
+const CONF_TB = {
+  8: { // SEC
+    src: { label: 'SEC official football tiebreakers (PDF)', url: 'https://www.secsports.com/fbtiebreaker' },
+    note: 'The procedure the SEC adopted in 2024, still the version it posts.',
+    two: [H2H, COMMON, walkDown(), SOS,
+      approx('Scoring margin', 'Capped relative scoring margin in conference games per SportSource Analytics: points scored and allowed compared with what each opponent usually allows and scores, with offense capped at 200%.'),
+      last('Random draw')],
+    multiH2h: h2hGroup({ sweep: true, loser: true }),
+  },
+  5: { // Big Ten
+    src: { label: 'Big Ten tiebreaker procedure (PDF, archived copy)', url: 'https://web.archive.org/web/2025/https://bigten.org/api/media/file/85192401-602f-47ca-82c8-e7f8c97ef0d2-2024_Big_Ten_Football_Tiebreaker_-_FINAL_10__72_.pdf' },
+    note: 'The procedure the Big Ten adopted in 2024. Its 2026 title-game page says tiebreakers apply but posts no newer version, and the original link is offline, so this links an archived copy.',
+    cont: true,
+    two: [H2H, COMMON, walkDown(), SOS, SPORTSOURCE, last('Random draw')],
+    multiH2h: h2hGroup({ sweep: true }),
+  },
+  4: { // Big 12
+    src: { label: 'Big 12 football championship tiebreaker policies', url: 'https://big12sports.com/sports/2024/9/6/FB_0906243427.aspx?path=football' },
+    note: 'The procedure the Big 12 adopted in 2024, still the version it posts.',
+    cont: true,
+    two: [H2H, COMMON, walkDown(), SOS, overall('Total wins', 'Total wins in the 12-game season, counting at most one win over an FCS team.', { fcs1: true, wins: true }), SPORTSOURCE, last('Coin toss')],
+    multiH2h: h2hGroup({ sweep: true }),
+  },
+  1: { // ACC
+    src: { label: 'ACC football tiebreaker policy (PDF)', url: 'https://theacc.com/documents/2026/7/15//ACC_Football_Tiebreaker_Policy_Jully_2026.pdf' },
+    note: 'Policy as amended July 1, 2026. Some teams play eight conference games and others nine, so a team that played a different number of games also counts as tied with the leaders when it has the same number of wins or the same number of losses. The ACC defines that for the top of the standings; the app applies it all the way down.',
+    altGames: true,
+    two: [H2H, SSR, last('Draw')],
+    multiH2h: h2hGroup({ sweep: true, loser: true }),
+  },
+  151: { // American
+    src: { label: 'American Conference football tiebreakers (PDF)', url: 'https://theamerican.org/documents/2025/10/29/25_FB_Tiebreakers.pdf' },
+    note: 'From the American\'s 2025 football handbook, the latest version it has posted.',
+    cont: true,
+    two: [H2H, cfpOrComputers(AAC_MIX), COMMON, OVERALL, last('Coin toss')],
+    multiH2h: h2hGroup({ sweep: true }),
+  },
+  15: { // MAC
+    src: { label: 'MAC football championship tiebreaker', url: 'https://getsomemaction.com/sports/2025/11/12/FB_1112255434.aspx' },
+    note: 'The procedure the MAC posted in 2025, the latest version on its site.',
+    two: [H2H, COMMON, SPORTSOURCE, walkDown({ broken: true }), SOS, last('Draw')],
+    multiH2h: h2hGroup({ sweep: true }),
+  },
+  17: { // Mountain West
+    src: { label: 'Mountain West championship tiebreaking procedures (PDF)', url: 'https://storage.googleapis.com/themw-com/2025/10/c71edc0a-2025-mw-football-championship-tiebreakers-final.pdf' },
+    note: 'The Mountain West procedure dated Aug. 22, 2024 and reposted for 2025, the latest version it has posted.',
+    cont: true,
+    two: [H2H, cfpOrComputers(MW_MIX), OVERALL_FCS1, walkDown({ whole: true }), COMMON, last('Coin toss')],
+    multiH2h: h2hGroup({ sweep: true }),
+  },
+  9: { // Pac-12
+    src: { label: 'Pac-12 2026 football announcement, tiebreaker section', url: 'https://pac-12.com/news/2026/9/3/pac-12-announces-commercial-and-operational-updates-ahead-of-its-2026-football-season-kickoff.aspx' },
+    note: 'The tiebreakers the Pac-12 published for 2026. Week 13 flex games don\'t count in the standings.',
+    cont: true,
+    two: [H2H, walkDown(), COMMON, approx('CFP ranking', 'Higher CFP ranking on the Tuesday before week 13.'), SPORTSOURCE, last('Coin toss')],
+    multi: [h2hGroup(), COMMON, walkDown(), SOS, SPORTSOURCE, last('Coin toss')],
+  },
+  37: { // Sun Belt
+    src: { label: 'Sun Belt football tie-breaking procedures', url: 'https://sunbeltsports.org/sports/2018/8/30/FB_Tie-Breakers.aspx' },
+    note: 'The Sun Belt\'s posted procedure, which lists the current divisions. Ties are broken within each division, and the two division champions are seeded with the host tiebreaker.',
+    cont: true,
+    two: [H2H, DIV_PCT, walkDown({ div: true }), NONDIV_COMMON, cfpOrComputers(SBC_MIX), VS_FBS, last('Coin toss')],
+    multi: [H2H_ALL, DIV_PCT, walkDown({ div: true }), NONDIV_COMMON, cfpOrComputers(SBC_MIX), VS_FBS, last('Drawing by lot')],
+    host: [H2H, cfpOrComputers(SBC_MIX), COMMON, VS_FBS, last('Coin toss')],
+  },
+  12: { // Conference USA
+    ...GENERIC_TB,
+    note: 'Conference USA doesn\'t post its current football tiebreaker procedure on its website, so this card uses the generic order most conferences share.',
+  },
+};
+// Unless a conference lists its own multi-team steps, they are its two-team steps with a group head-to-head first
+for (const tb of [GENERIC_TB, ...Object.values(CONF_TB)]) tb.multi ||= [tb.multiH2h || H2H_ALL, ...tb.two.slice(1)];
+const TB = cid => CONF_TB[cid] || GENERIC_TB;
+function breakTie(rec, grp, log, tb, from = 0) {
   if (grp.length < 2) return grp;
-  for (const step of TIEBREAKERS) {
-    const v = step.fn(rec, grp), best = Math.max(...v);
+  const steps = grp.length === 2 ? tb.two : tb.multi;
+  for (let k = grp.length === 2 ? 0 : from; k < steps.length; k++) {
+    const step = steps[k], v = step.fn(rec, grp), best = Math.max(...v);
     const top = grp.filter((t, i) => best - v[i] < 1e-9);
     if (top.length < grp.length) {
-      if (log) log.push({ teams: [...grp], step: step.name, top });
-      return [...breakTie(rec, top, log), ...breakTie(rec, grp.filter(t => !top.includes(t)), log)];
+      if (log) log.push({ teams: [...grp], step: step.name, approx: step.approx, top });
+      const rest = grp.filter(t => !top.includes(t));
+      return [...breakTie(rec, top, log, tb, tb.cont && top.length > 2 ? k + 1 : 0), ...breakTie(rec, rest, log, tb)];
     }
   }
   return grp;
 }
-function sortConf(ids, rec, log) {
+function sortConf(ids, rec, log, tb) {
   const a = [...ids].sort((x, y) => confPct(rec, y) - confPct(rec, x) || rec[x].cl - rec[y].cl);
+  const games = t => rec[t].cw + rec[t].cl;
   const out = [];
-  for (let i = 0; i < a.length;) {
-    let j = i; while (j < a.length && confPct(rec, a[j]) === confPct(rec, a[i]) && rec[a[j]].cl === rec[a[i]].cl) j++;
-    out.push(...breakTie(rec, a.slice(i, j), log)); i = j;
+  while (a.length) {
+    const lead = a.filter(t => confPct(rec, t) === confPct(rec, a[0]) && rec[t].cl === rec[a[0]].cl);
+    // ACC: a team that played a different number of conference games ties the leaders on equal wins or equal losses
+    const grp = tb.altGames ? a.filter(t => lead.includes(t) || lead.some(s => games(t) !== games(s) && (rec[t].cw === rec[s].cw || rec[t].cl === rec[s].cl))) : lead;
+    out.push(...breakTie(rec, grp, log, tb));
+    for (const t of grp) a.splice(a.indexOf(t), 1);
   }
   return out;
 }
@@ -378,12 +535,12 @@ function runSeason(mode, rng, w, trace) {
   const st = {}, ccg = {}, champs = {};
   for (const c of D.conferences) {
     if (c.id === IND) continue;
-    const mem = FBS.filter(i => T[i].conf === c.id);
-    const mk = (div, ids) => { const ties = mode === 'pick' ? [] : null; return { div, ids: sortConf(ids, rec, ties), ties }; };
+    const mem = FBS.filter(i => T[i].conf === c.id), tb = TB(c.id);
+    const mk = (div, ids) => { const ties = mode === 'pick' ? [] : null; return { div, ids: sortConf(ids, rec, ties, tb), ties }; };
     const groups = c.divisions.length ? c.divisions.map(d => mk(d, mem.filter(i => T[i].div === d))) : [mk(null, mem)];
     st[c.id] = groups;
     const [a, b] = groups.length > 1 ? [groups[0].ids[0], groups[1].ids[0]] : groups[0].ids.slice(0, 2);
-    const [hi, lo] = sortConf([a, b], rec)[0] === a ? [a, b] : [b, a];
+    const [hi, lo] = sortConf([a, b], rec, null, tb.host ? { ...tb, two: tb.host } : tb)[0] === a ? [a, b] : [b, a];
     const win = decide(hi, lo, 0, S.ccg[c.id], mode, rng);
     ccg[c.id] = { a: hi, b: lo, win };
     champs[c.id] = win;
@@ -739,25 +896,35 @@ function tieNotes(ties) {
   if (!ties || !ties.length) return '';
   const abbrs = ids => ids.map(i => esc(T[i].abbr)).join(', ');
   return `<ul class="ties">` + ties.map(t => {
-    const r = P.rec[t.teams[0]];
-    return `<li><b>${abbrs(t.teams)}</b> tied at ${r.cw}-${r.cl}. ${esc(t.step)} puts ${abbrs(t.top)} ahead.</li>`;
+    const recs = [...new Set(t.teams.map(i => `${P.rec[i].cw}-${P.rec[i].cl}`))];
+    const at = recs.length === 1 ? `tied at ${recs[0]}` : `tied (${recs.join(', ')}, which counts as a tie because they played different numbers of conference games)`;
+    return `<li><b>${abbrs(t.teams)}</b> ${at}. ${esc(t.step)}${t.approx ? ' (team rating standing in)' : ''} puts ${abbrs(t.top)} ahead.</li>`;
   }).join('') + `</ul>`;
+}
+function tbRules(cid) {
+  const tb = TB(cid);
+  const list = steps => `<ol>${steps.map(s => `<li><b>${esc(s.name)}${s.approx ? ' ≈' : ''}.</b> ${esc(s.about)}</li>`).join('')}</ol>`;
+  const flow = tb.cont ? ' When a step narrows a group of three or more, the teams still tied move on to the next step; once two are left, they start over with the two-team steps.'
+    : ' When a step separates some of the tied teams, each smaller group starts over at step 1.';
+  const src = tb.src ? ` Source: <a href="${esc(tb.src.url)}" target="_blank" rel="noopener">${esc(tb.src.label)}</a>.` : '';
+  return `<details class="tb" data-c="${cid}"${S.tbOpen && S.tbOpen[cid] ? ' open' : ''}><summary>Tiebreakers${tb.generic ? ' (generic order)' : ''}</summary>
+    <h5>Two teams</h5>${list(tb.two)}<h5>Three or more teams</h5>${list(tb.multi)}${tb.host ? `<h5>Title game host</h5>${list(tb.host)}` : ''}
+    <p class="hint">${esc(tb.note)}${flow}${src}</p></details>`;
 }
 function renderStandings() {
   const cards = D.conferences.filter(c => c.id !== IND).map(c => {
     const groups = P.st[c.id], cg = P.ccg[c.id];
     const body = groups.length > 1 ? groups.map(gr => `<h4>${esc(gr.div)}</h4>` + standTable(gr.ids, 1) + tieNotes(gr.ties)).join('') : standTable(groups[0].ids, 2) + tieNotes(groups[0].ties);
-    return `<section class="card"><h3>${esc(c.name.replace(' Conference', ''))}<span class="pill">${esc(T[cg.a].abbr)} vs ${esc(T[cg.b].abbr)}</span></h3>${body}</section>`;
+    return `<section class="card"><h3>${esc(c.name.replace(' Conference', ''))}<span class="pill">${esc(T[cg.a].abbr)} vs ${esc(T[cg.b].abbr)}</span></h3>${body}${tbRules(c.id)}</section>`;
   }).join('');
   const ind = FBS.filter(i => T[i].conf === IND);
   const indCard = ind.length ? `<section class="card"><h3>Independents</h3>${standTable(ind.sort((a, b) => P.rk[a] - P.rk[b]), 0)}</section>` : '';
-  const rules = TIEBREAKERS.map(s => `<li><b>${esc(s.name)}.</b> ${esc(s.about)}</li>`).join('');
   return `<h2>Projected final standings</h2>
     <p class="lede">Final records using real results, your picks, and favorites for everything else. The orange edge marks who plays in the title game. Tap a team to see and change its schedule.</p>
     <details class="rules" id="rules"${S.rulesOpen ? ' open' : ''}><summary>How ties are broken</summary>
-      <p>Teams with the same conference record go through these steps in order. When a step separates some of the tied teams, each smaller group starts over at step 1.</p>
-      <ol>${rules}<li><b>Coin flip.</b> Last resort. It never comes up here because ratings always differ.</li></ol>
-      <p class="hint">This is the order the FBS conferences broadly share. Each conference's official procedure adds details, such as how to handle teams that didn't all play each other, and the Sun Belt breaks ties within each division. Each conference publishes its exact rules on its website.</p>
+      <p>Teams with the same conference record go through their own conference's tiebreaker steps. Open <b>Tiebreakers</b> on any card below to see that conference's steps, with a link to its official rules. Most conferences use different steps for two tied teams than for three or more, and the Sun Belt breaks ties within each division.</p>
+      <p>Steps marked ≈ use something the app can't calculate, such as a CFP ranking, a SportSource Analytics rating or a composite of computer rankings. The team rating chosen under "Win % from" stands in for those. Because ratings always differ, coin tosses and draws never come up.</p>
+      <p class="hint">Conference USA doesn't post its current procedure on its website, so its card uses the generic order most conferences share: head-to-head, common opponents, best common opponent, strength of schedule, then team rating.</p>
     </details>
     <div class="cards">${cards}${indCard}</div>`;
 }
@@ -1026,7 +1193,10 @@ document.addEventListener('click', e => {
 const sheetEl = document.getElementById('sheet');
 sheetEl.addEventListener('click', e => { if (e.target === sheetEl) sheetEl.close(); }); // backdrop
 sheetEl.addEventListener('close', () => { S.team = null; });
-document.addEventListener('toggle', e => { if (e.target.id === 'rules') { S.rulesOpen = e.target.open; save(); } }, true);
+document.addEventListener('toggle', e => {
+  if (e.target.id === 'rules') { S.rulesOpen = e.target.open; save(); }
+  if (e.target.classList && e.target.classList.contains('tb')) { S.tbOpen = { ...S.tbOpen, [e.target.dataset.c]: e.target.open }; save(); }
+}, true);
 document.addEventListener('change', e => {
   if (e.target.id === 'f-conf') { S.conf = e.target.value; save(); render(); }
   if (e.target.id === 'f-imp-team') { S.impTeam = e.target.value; save(); render(); }
