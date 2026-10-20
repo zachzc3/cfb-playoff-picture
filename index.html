@@ -195,6 +195,44 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
 .weigh input { width: min(260px, 60vw); accent-color: var(--pylon); }
 .weigh label { font-weight: 600; }
 .cut td { border-top: 2px dashed var(--pylon); }
+/* conference grid */
+.mx-confs { flex-wrap: wrap; }
+.mx-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 16px; align-items: start; }
+@media (max-width: 980px) { .mx-wrap { grid-template-columns: minmax(0, 1fr); } }
+table.mx { width: auto; border-collapse: separate; border-spacing: 3px; }
+.mx th, .mx td { padding: 0; border: 0; }
+.mx thead th { text-align: center; vertical-align: bottom; padding-bottom: 2px; }
+.mx thead .chip { min-width: 44px; }
+.mx .rowh { position: sticky; left: 0; z-index: 1; background: var(--bg); padding: 0 8px 0 4px; white-space: nowrap; font-weight: 500; max-width: 190px; }
+.mx .rowh.ccg { box-shadow: inset 3px 0 0 var(--pylon); }
+.mx tr.div-start th, .mx tr.div-start td { border-top: 2px solid var(--line); }
+.mx td.c { width: 48px; height: 40px; text-align: center; border-radius: 5px; font-family: var(--data); line-height: 1.05; font-variant-numeric: tabular-nums; }
+.mx td.c b { display: block; font-size: 15px; }
+.mx td.c small { font-size: 11px; color: var(--muted); }
+.mx .mx-self { background: var(--line); }
+.mx .mx-none { background: repeating-linear-gradient(135deg, transparent 0 5px, var(--line) 5px 6px); opacity: .5; }
+.mx .fin.w { background: var(--turf-soft); color: var(--win); }
+.mx .fin.l { background: var(--surface); color: var(--loss); }
+.mx .tot { padding: 0 6px; font-family: var(--data); font-size: 15px; white-space: nowrap; }
+.mx-btn { width: 100%; height: 40px; display: grid; place-content: center; gap: 1px; padding: 0; border: 1px dashed var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; font-family: var(--data); line-height: 1.05; }
+.mx-btn b { font-size: 15px; }
+.mx-btn small { font-size: 11px; color: var(--muted); }
+.mx-btn:hover { border-color: var(--turf); }
+.mx-btn.fw { background: var(--turf-soft); color: var(--turf); }
+.mx-btn.fl { color: var(--muted); }
+.mx-btn.pw { background: var(--turf); border: 1px solid var(--turf); color: var(--bg); }
+.mx-btn.pw small { color: var(--bg); opacity: .85; }
+.mx-btn.pl { border: 1.5px solid var(--loss); color: var(--loss); }
+.mx-btn.sim { border-style: dashed; }
+.mx-side h3 { margin: 4px 0 8px; }
+.mx-side td.n { white-space: nowrap; }
+.mx-side .hide-sm { display: none; }
+.mx-side .tg { display: grid; gap: 6px; margin-bottom: 6px; }
+.legend i.lg { border: 1px dashed var(--line); background: var(--surface); }
+.legend i.lg.fw { background: var(--turf-soft); }
+.legend i.lg.pw { background: var(--turf); border: 1px solid var(--turf); }
+.legend i.lg.pl { border: 1.5px solid var(--loss); }
+.legend i.lg.fin-w { background: var(--turf-soft); border: 0; }
 .espn { color: var(--muted); }
 th.espn { color: var(--muted); opacity: .8; }
 .weigh.fit { justify-content: space-between; }
@@ -781,7 +819,7 @@ const sgn = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(1);
 let P; // deterministic projection from picks + favorites
 function project() { P = runSeason('pick', null, S.w); }
 
-const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['team', 'Team'], ['impact', 'Big games'], ['sim', 'Simulator'], ['odds', 'Odds']];
+const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['matrix', 'Conference grid'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['team', 'Team'], ['impact', 'Big games'], ['sim', 'Simulator'], ['odds', 'Odds']];
 function renderTabs() {
   document.getElementById('tabs').innerHTML = TABS.map(([k, l]) =>
     `<button class="tab" role="tab" type="button" data-act="tab" data-v="${k}" aria-selected="${S.tab === k}">${l}</button>`).join('');
@@ -953,6 +991,77 @@ function renderStandings() {
       <p class="hint">Conference USA doesn't post its current procedure on its website, so its card uses the generic order most conferences share: head-to-head, common opponents, best common opponent, strength of schedule, then team rating.</p>
     </details>
     <div class="cards">${cards}${indCard}</div>`;
+}
+
+// Conference grid: one row and one column per team, ordered by projected standings. Reading across a row gives
+// that team's result against each column team. Tapping an open cell makes the row team win; tapping again
+// goes back to the projection.
+const CONF_SHORT = { American: 'AAC', acc: 'ACC', big12: 'Big 12', big10: 'Big Ten', usa: 'C-USA', midam: 'MAC', mwest: 'Mountain West', pac12: 'Pac-12', sec: 'SEC', belt: 'Sun Belt' };
+const pairKey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+function confGames(cid) {
+  const pair = {};
+  for (const g of GAMES) if (T[g.home] && T[g.away] && T[g.home].conf === cid && T[g.away].conf === cid) (pair[pairKey(g.home, g.away)] ||= []).push(g);
+  return pair;
+}
+function mxCell(r, col, pair) {
+  if (r === col) return `<td class="c mx-self" aria-hidden="true"></td>`;
+  const games = pair[pairKey(r, col)];
+  if (!games) return `<td class="c mx-none" title="${esc(T[r].name)} and ${esc(T[col].name)} don't play"></td>`;
+  const g = games[0], rowHome = g.home === r, side = rowHome ? 'home' : 'away';
+  const where = g.neutral ? 'vs ' : rowHome ? '' : '@ ';
+  const vs = `${esc(T[r].name)} ${rowHome || g.neutral ? 'vs.' : 'at'} ${esc(T[col].name)}, week ${g.week}`;
+  if (g.final) {
+    const won = rowHome ? g.hs > g.as : g.as > g.hs, score = rowHome ? `${g.hs}-${g.as}` : `${g.as}-${g.hs}`;
+    return `<td class="c fin ${won ? 'w' : 'l'}" title="${vs}: final ${score}"><b>${won ? 'W' : 'L'}</b><small>${score}</small></td>`;
+  }
+  const p = rowHome ? pHome(g) : 1 - pHome(g), pick = S.picks[g.id];
+  const st = pick ? (pick === side ? 'pw' : 'pl') : (p >= 0.5 ? 'fw' : 'fl');
+  const letter = st === 'pw' || st === 'fw' ? 'W' : 'L';
+  const how = pick ? (S.sim[g.id] ? 'simulated' : 'your pick') : 'projected';
+  return `<td class="c"><button class="mx-btn ${st}${pick && S.sim[g.id] ? ' sim' : ''}" type="button" data-act="mx" data-g="${g.id}" data-s="${side}"
+    title="${vs}. ${esc(T[r].name)} win chance ${fmtPct(p)}. Now: ${letter === 'W' ? 'win' : 'loss'} (${how}). Tap to ${pick === side ? 'go back to the projection' : 'make ' + esc(T[r].name) + ' win'}.">
+    <b>${letter}</b><small>${where}${fmtPct(p)}</small></button></td>`;
+}
+function renderMatrix() {
+  const confs = D.conferences.filter(c => c.id !== IND);
+  if (!confs.some(c => c.id === S.mxConf)) S.mxConf = '8';
+  const c = CONF[S.mxConf], groups = P.st[c.id], pair = confGames(c.id);
+  const ids = groups.flatMap(gr => gr.ids);
+  const ccgIds = new Set([P.ccg[c.id].a, P.ccg[c.id].b]);
+  const divStart = new Set(groups.slice(1).map(gr => gr.ids[0]));
+  const confBtns = confs.map(x => `<button type="button" data-act="mx-conf" data-v="${x.id}" aria-pressed="${x.id === c.id}">${esc(CONF_SHORT[x.abbr] || x.abbr)}</button>`).join('');
+  const head = `<tr><th></th>${ids.map(id => `<th title="${esc(T[id].name)}">${chip(id)}</th>`).join('')}<th class="n">Conf</th><th class="n">CFP%</th></tr>`;
+  const body = ids.map(r => {
+    const rec = P.rec[r];
+    return `<tr class="${divStart.has(r) ? 'div-start' : ''}"><th class="rowh${ccgIds.has(r) ? ' ccg' : ''}">${teamCell(r)}</th>${ids.map(col => mxCell(r, col, pair)).join('')}
+      <td class="n tot">${rec.cw}-${rec.cl}</td><td class="n tot">${playoffPct(r)}</td></tr>`;
+  }).join('');
+  const m = P.ccg[c.id], pa = pWin(m.a, m.b, 0);
+  const tgBtn = (id, p) => {
+    const picked = S.ccg[c.id] === id, proj = !S.ccg[c.id] && m.win === id;
+    return `<button class="side${picked ? ' picked' : proj ? ' proj' : ''}" type="button" data-act="ccg" data-c="${c.id}" data-v="${id}">${chip(id)}<span class="nm">${esc(T[id].name)}<small>${recStr(P.rec[id])}</small></span><span class="p">${fmtPct(p)}</span></button>`;
+  };
+  const champ = P.champs[c.id], seed = P.seeds.indexOf(champ);
+  const nPicked = Object.values(pair).flat().filter(g => S.picks[g.id]).length + (S.ccg[c.id] ? 1 : 0);
+  const standings = groups.length > 1
+    ? groups.map(gr => `<h4>${esc(gr.div)}</h4>` + standTable(gr.ids, 1) + tieNotes(gr.ties)).join('')
+    : standTable(groups[0].ids, 2) + tieNotes(groups[0].ties);
+  const short = CONF_SHORT[c.abbr] || c.name.replace(' Conference', '');
+  return `<h2>${esc(short)} grid</h2>
+    <p class="lede">Read across a row for that team's result against each team at the top. Tap an open game to make the row team win, and tap it again to go back to the projection. The standings, title game and playoff picture next to the grid update as you go.</p>
+    <div class="filters"><div class="seg mx-confs" role="group" aria-label="Conference">${confBtns}</div>
+      <button class="btn" type="button" data-act="mx-clear"${nPicked ? '' : ' disabled'}>Clear ${esc(short)} picks</button></div>
+    <div class="legend"><span><i class="lg fw"></i>Projected win</span><span><i class="lg pw"></i>Your pick: win</span><span><i class="lg pl"></i>Your pick: loss</span><span><i class="lg fin-w"></i>Final</span><span>@ away · vs neutral · % is the row team's win chance</span></div>
+    <div class="mx-wrap">
+      <div class="scroll mx-scroll"><table class="mx"><thead>${head}</thead><tbody>${body}</tbody></table></div>
+      <aside class="card mx-side">
+        <h3>Title game</h3>
+        <div class="tg">${tgBtn(m.a, pa)}${tgBtn(m.b, 1 - pa)}</div>
+        <p class="hint">${esc(T[champ].name)} wins the title${seed >= 0 ? ` and is the No. ${seed + 1} seed${P.auto.has(champ) ? ' with an automatic bid' : ''}` : ' but misses the playoff'}.</p>
+        <h3>Standings</h3>
+        ${standings}
+      </aside>
+    </div>`;
 }
 
 function renderTitle() {
@@ -1249,7 +1358,7 @@ function render() {
   document.getElementById('f-src').value = S.src;
   const dlg = document.getElementById('sheet');
   if (dlg.open && T[S.team]) { const y = dlg.scrollTop; dlg.innerHTML = renderSheet(); dlg.scrollTop = y; }
-  const f = { picks: renderPicks, standings: renderStandings, title: renderTitle, rank: renderRank, playoff: renderPlayoff, team: renderTeam, impact: renderImpact, sim: renderSim, odds: renderOdds }[S.tab] || renderPicks;
+  const f = { picks: renderPicks, standings: renderStandings, matrix: renderMatrix, title: renderTitle, rank: renderRank, playoff: renderPlayoff, team: renderTeam, impact: renderImpact, sim: renderSim, odds: renderOdds }[S.tab] || renderPicks;
   const main = document.getElementById('main');
   const focusId = document.activeElement && document.activeElement.id, selStart = document.activeElement && document.activeElement.selectionStart;
   main.innerHTML = f() + NOTE;
@@ -1263,6 +1372,9 @@ document.addEventListener('click', e => {
   const a = b.dataset.act;
   if (a === 'team') { openSheet(b.dataset.v); return; }
   if (a === 'close-sheet') { document.getElementById('sheet').close(); return; }
+  if (a === 'mx') { const g = b.dataset.g, sd = b.dataset.s; delete S.sim[g]; S.picks[g] === sd ? delete S.picks[g] : S.picks[g] = sd; return changed(); }
+  if (a === 'mx-conf') { S.mxConf = b.dataset.v; save(); render(); return; }
+  if (a === 'mx-clear') { const c = S.mxConf; Object.values(confGames(c)).flat().forEach(g => { delete S.picks[g.id]; delete S.sim[g.id]; }); delete S.ccg[c]; delete S.simCcg[c]; return changed(); }
   if (a === 'fit-w') { S.w = +b.dataset.v; return changed(); }
   if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
   if (a === 'imp-n') { S.impN = +b.dataset.v; save(); render(); return; }

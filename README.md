@@ -9,6 +9,7 @@ Open `index.html` in a browser. It has no build step and needs no server.
 - **Pick games.** Every FBS game, week by week. Completed games are locked with their real scores. Tap a team to pick it. Any game you don't pick goes to the favorite.
 - **Standings.** Projected final conference standings from the real results, your picks and the favorites, with a note on how each tie was broken.
 - **Team schedules.** Click any team in Standings, Rankings or Odds to see its full schedule and change its games.
+- **Conference grid.** A head-to-head grid for each conference: one row and column per team, finals filled in, open games one tap to flip, with the standings, title game and playoff picture updating beside it.
 - **Title games.** Conference championship matchups come from your standings. Pick the winners.
 - **Rankings.** A stand-in for the selection committee that blends a résumé score (strength of record) with a power rating. A slider controls how much weight each one gets. The real AP poll (and the CFP committee rankings once they're released) sits alongside, and **Match the committee** sets the slider to the weight that best reproduces the real ranking. Each regular-season loss costs a set amount on top of its résumé hit (fit to the AP poll), and a conference title game can only help: the loser isn't charged for that loss.
 - **Playoff.** The 12-team field: the five highest-ranked conference champions plus seven at-large teams, seeded straight by ranking. Seeds 1–4 get byes. Pick your way to a national champion.
