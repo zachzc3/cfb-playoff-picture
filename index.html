@@ -69,6 +69,7 @@ h2 { font-family: var(--data); font-size: 22px; font-weight: 700; letter-spacing
 .chip.logo .ab { display: none; }
 .champ .chip.logo, .sheet-head .chip.logo { background: var(--board-ink); }
 .rk { font-family: var(--data); font-size: 12px; color: var(--muted); font-weight: 600; }
+.rk.proj { font-style: italic; }
 
 /* filters */
 .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
@@ -943,7 +944,7 @@ const recStr = (r) => `${r.w}-${r.l}`;
 const fmtPct = p => p >= .995 ? '>99%' : p < .005 ? '<1%' : Math.round(p * 100) + '%';
 const sgn = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(1);
 let P; // deterministic projection from picks + favorites
-function project() { P = runSeason('pick', null, S.w); }
+function project() { P = runSeason('pick', null, S.w); PROJ_POLL = {}; }
 
 const TABS = [['picks', 'Pick games'], ['standings', 'Standings'], ['matrix', 'Conference grid'], ['title', 'Title games'], ['rank', 'Rankings'], ['playoff', 'Playoff'], ['team', 'Team'], ['impact', 'Big games'], ['sim', 'Simulator'], ['odds', 'Odds']];
 function renderTabs() {
@@ -975,7 +976,7 @@ function sideBtn(g, side) {
   const p = side === 'home' ? pHome(g) : 1 - pHome(g);
   const fcs = !T[id];
   const pr = !fcs && pollRank(id, g.week);
-  const r = !fcs && P.rec[id], rank = pr ? `<span class="rk" title="${esc(pollForWeek(g.week).label)} rank">${pr}</span> ` : '';
+  const r = !fcs && P.rec[id], rank = pr ? `<span class="rk${pollForWeek(g.week).projected ? ' proj' : ''}" title="${esc(pollForWeek(g.week).label)} rank">${pr}</span> ` : '';
   const name = fcs ? esc(g.fcsName || 'FCS opponent') : esc(T[id].name);
   let cls = 'side', right;
   if (g.final) {
@@ -1056,9 +1057,10 @@ function openSheet(id) {
 // The real poll for a week: the latest CFP ranking (once released), else the latest AP poll, dated on or before
 // that week's first game. Weeks older than every saved poll use the earliest one, flagged as `early`.
 const POLL_WEEK = {};
-function pollForWeek(week) {
+const weekStart = week => GAMES.filter(g => g.week === week).map(g => etDate(g.date)).sort()[0];
+function realPollForWeek(week) {
   if (POLL_WEEK[week] !== undefined) return POLL_WEEK[week];
-  const start = GAMES.filter(g => g.week === week).map(g => etDate(g.date)).sort()[0];
+  const start = weekStart(week);
   const pick = kind => {
     const arch = pollArchive(kind), dates = Object.keys(arch).sort();
     if (!dates.length) return null;
@@ -1069,6 +1071,30 @@ function pollForWeek(week) {
   const cfp = pick('cfp');
   return POLL_WEEK[week] = (cfp && !cfp.early ? cfp : null) || pick('ap');
 }
+// Weeks after the latest real poll get a projected Top 25: the real poll's order, moved by how much each team's
+// results since that poll (real results, your picks, then favorites) change its committee-model score.
+let PROJ_POLL = {};
+function pollForWeek(week) {
+  const open = GAMES.some(g => g.week < week && !g.final);
+  const real = realPollForWeek(week);
+  if (!open || !real) return real;
+  if (PROJ_POLL[week]) return PROJ_POLL[week];
+  // The real poll covers results through the week before the first week that starts after it
+  const later = [...new Set(GAMES.map(g => g.week))].sort((a, b) => a - b).filter(w => weekStart(w) > real.date);
+  const covered = (later[0] || week) - 1;
+  const A = runSeason('pick', null, S.w, null, covered), B = runSeason('pick', null, S.w, null, week - 1);
+  const sortedA = FBS.map(i => A.score[i]).sort((a, b) => b - a);
+  const n = Object.keys(real.ranks).length, floor = sortedA[n - 1] - 1e-3;
+  const proj = {};
+  FBS.forEach(i => {
+    const r = real.ranks[i];
+    const anchor = r ? sortedA[r - 1] : Math.min(A.score[i], floor);
+    proj[i] = anchor + (B.score[i] - A.score[i]);
+  });
+  const ranks = {};
+  [...FBS].sort((a, b) => proj[b] - proj[a]).slice(0, 25).forEach((id, k) => ranks[id] = k + 1);
+  return PROJ_POLL[week] = { projected: true, base: real, label: 'Projected', through: week - 1, ranks };
+}
 const pollRank = (id, week) => { const pw = pollForWeek(week); return pw && T[id] ? pw.ranks[id] || null : null; };
 const rankedGame = g => !!(pollRank(g.home, g.week) || pollRank(g.away, g.week));
 function renderPicks() {
@@ -1078,8 +1104,10 @@ function renderPicks() {
   const match = id => T[id] && ((!S.conf || T[id].conf === S.conf) && (!q || (T[id].name + ' ' + T[id].abbr + ' ' + T[id].mascot).toLowerCase().includes(q)));
   const list = GAMES.filter(g => (q ? true : g.week === S.week) && (match(g.home) || match(g.away)) && (!S.top25 || rankedGame(g)));
   const pw = pollForWeek(S.week);
-  const pollName = pw ? (pw.name || '').split(' - ').pop() || pw.label + ' poll' : '';
-  const pollNote = !pw ? 'No poll saved yet.' : `Ranks are from the ${esc(pollName)}${pw.early ? ', the earliest poll saved, so they may not match that week' : ''}.`;
+  const nameOf = x => (x.name || '').split(' - ').pop() || x.label + ' poll';
+  const pollNote = !pw ? 'No poll saved yet.'
+    : pw.projected ? `Ranks are projected: the ${esc(nameOf(pw.base))}, moved by results through week ${pw.through} (real results, your picks, then the favorite in every other game). Change a pick and they update.`
+    : `Ranks are from the ${esc(nameOf(pw))}${pw.early ? ', the earliest poll saved, so they may not match that week' : ''}.`;
   const wkBtns = weeks.map(w => {
     const done = GAMES.filter(g => g.week === w).every(g => g.final);
     return `<button class="wk${done ? ' done' : ''}" type="button" data-act="week" data-v="${w}" aria-pressed="${!q && S.week === w}">${w}</button>`;
