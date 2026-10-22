@@ -195,6 +195,30 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
 .weigh input { width: min(260px, 60vw); accent-color: var(--pylon); }
 .weigh label { font-weight: 600; }
 .cut td { border-top: 2px dashed var(--pylon); }
+/* the Oracle */
+.oracle { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 18px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 4px 0 16px; max-width: 760px; }
+@media (max-width: 520px) { .oracle { grid-template-columns: 1fr; justify-items: center; text-align: center; } .oracle .stops { justify-content: center; } }
+.orb { width: 150px; height: auto; display: block; }
+.orb .stand { fill: var(--ink); opacity: .85; }
+.orb .ball { stroke: var(--orb); stroke-width: 1.5; }
+.orb .sw { fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; opacity: .55; }
+.orb .sw.thin { stroke-width: 2; opacity: .4; }
+.orb .swirl { transform-origin: 70px 64px; animation: orbspin linear infinite; }
+.orb .ln { fill: none; stroke: #1d2a22; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.orb .ln.fill { fill: #1d2a22; }
+.orb .ey { fill: #1d2a22; }
+.orb .shine { fill: #fff; opacity: .7; }
+.orb .spark { fill: var(--orb); animation: twinkle 1.6s ease-in-out infinite; }
+@keyframes orbspin { to { transform: rotate(360deg); } }
+@keyframes twinkle { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .orb .swirl, .orb .spark { animation: none; } }
+.oracle .k { font-family: var(--data); text-transform: uppercase; letter-spacing: .1em; font-size: 12px; color: var(--muted); }
+.oracle .t { font-family: var(--display); font-size: clamp(22px, 3.4vw, 30px); line-height: 1.1; color: var(--orb); }
+.oracle p { margin: 6px 0; }
+.oracle input[type="range"] { width: 100%; max-width: 420px; accent-color: var(--orb); margin: 6px 0 2px; }
+.oracle .stops { display: flex; flex-wrap: wrap; gap: 4px; }
+.oracle .stops button { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.oracle .stops button[aria-pressed="true"] { background: var(--orb); border-color: var(--orb); color: #fff; }
 .chart { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 10px 8px; max-width: 760px; }
 .chart svg { width: 100%; height: auto; display: block; font-family: var(--data); }
 .chart .gl { stroke: var(--line); stroke-width: 1; }
@@ -714,13 +738,38 @@ function playBracket(seeds, mode, rng) {
 ['sim', 'simCcg', 'simCfp'].forEach(k => { if (!S[k] || typeof S[k] !== 'object') S[k] = {}; });
 const BRACKET_ORDER = ['R1A', 'R1B', 'R1C', 'R1D', 'QF1', 'QF2', 'QF3', 'QF4', 'SF1', 'SF2', 'F'];
 const flip = p => Math.random() < p;
+// The Oracle's upset dial. Each setting scales every game's spread by k: k > 1 makes favorites safer, k < 1 makes
+// upsets likelier, and k = 0 turns every game into a coin flip. Only the Simulator uses it.
+const CHAOS = [
+  { k: 4, name: 'Chalk', line: 'The favorite wins. Almost always. Nobody has any fun.', color: '#3d7fc4', glow: '#a9cdf2', mood: 0 },
+  { k: 1.7, name: 'Favorite-friendly', line: 'A surprise here and there, but mostly order.', color: '#2f8f87', glow: '#9fdcd5', mood: 1 },
+  { k: 1, name: 'By the book', line: 'Upsets happen exactly as often as the odds say.', color: '#3f8a4f', glow: '#a9dcb2', mood: 2 },
+  { k: 0.6, name: 'Spicy', line: "More upsets than the odds expect. Somebody's season is about to end.", color: '#d17a26', glow: '#f6c99a', mood: 3 },
+  { k: 0.3, name: 'Chaos', line: 'Every Saturday is a war zone. Lock your doors.', color: '#c2410c', glow: '#f9a98a', mood: 4 },
+  { k: 0, name: 'Coin flips', line: 'Ratings mean nothing. Every game is 50/50.', color: '#7c4dcc', glow: '#cdb6f5', mood: 5 },
+];
+const chaosLevel = () => CHAOS[Math.min(5, Math.max(0, S.chaos ?? 2))];
+// Inverse of Phi (Acklam's approximation), to turn a win chance back into a spread
+function probit(p) {
+  p = Math.min(1 - 1e-9, Math.max(1e-9, p));
+  const a = [-39.6968302866538, 220.946098424521, -275.928510446969, 138.357751867269, -30.6647980661472, 2.50662827745924];
+  const b = [-54.4760987982241, 161.585836858041, -155.698979859887, 66.8013118877197, -13.2806815528857];
+  const c = [-0.00778489400243029, -0.322396458041136, -2.40075827716184, -2.54973253934373, 4.37466414146497, 2.93816398269878];
+  const d = [0.00778469570904146, 0.32246712907004, 2.445134137143, 3.75440866190742];
+  const lo = 0.02425;
+  if (p < lo) { const q = Math.sqrt(-2 * Math.log(p)); return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+  if (p > 1 - lo) return -probit(1 - p);
+  const q = p - 0.5, r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+const dial = (p, lvl = chaosLevel()) => lvl.k === 1 ? p : lvl.k === 0 ? 0.5 : Phi(lvl.k * probit(p));
 const openGames = () => GAMES.filter(g => !g.final && !S.picks[g.id]);
 function simGames(list) {
   const log = [];
   for (const g of list) {
-    const p = pHome(g), hw = flip(p);
+    const p = pHome(g), pa = dial(p), hw = flip(pa);
     S.picks[g.id] = hw ? 'home' : 'away'; S.sim[g.id] = 1;
-    log.push({ id: g.id, p: hw ? p : 1 - p }); // p = chance the winner had going in
+    log.push({ id: g.id, p: hw ? p : 1 - p, pa: hw ? pa : 1 - pa }); // winner's real chance, and its chance at the dial setting
   }
   return log;
 }
@@ -736,28 +785,29 @@ function simPost() {
   for (const c in P.ccg) {
     const m = P.ccg[c];
     if (S.ccg[c] === m.a || S.ccg[c] === m.b) continue;
-    const p = pWin(m.a, m.b), aw = flip(p);
+    const p = pWin(m.a, m.b), aw = flip(dial(p));
     S.ccg[c] = aw ? m.a : m.b; S.simCcg[c] = 1; post.push({ a: m.a, b: m.b, win: S.ccg[c], p: aw ? p : 1 - p, label: CONF[c].name.replace(' Conference', '') + ' title' });
   }
   project();
   for (const k of BRACKET_ORDER) {
     const g = P.bracket[k];
     if (!(S.cfp[k] === g.a || S.cfp[k] === g.b)) {
-      const p = pWin(g.a, g.b, g.home ? HFA : 0), aw = flip(p);
+      const p = pWin(g.a, g.b, g.home ? HFA : 0), aw = flip(dial(p));
       S.cfp[k] = aw ? g.a : g.b; S.simCfp[k] = 1; post.push({ a: g.a, b: g.b, win: S.cfp[k], p: aw ? p : 1 - p, label: g.label });
     }
     project();
   }
   return post;
 }
-function simWeek() {
+function simWeek() { simWeekInner(); S.lastSim.dial = chaosLevel().name; }
+function simWeekInner() {
   const open = openGames();
   if (!open.length) { S.lastSim = { label: 'Postseason', games: [], post: simPost() }; return; }
   const wk = open[0].week;
   clearSimPost();
   S.lastSim = { label: 'Week ' + wk, games: simGames(open.filter(g => g.week === wk)), post: [] };
 }
-function simRest(label) { S.lastSim = { label, games: simGames(openGames()), post: [] }; S.lastSim.post = simPost(); }
+function simRest(label) { S.lastSim = { label, games: simGames(openGames()), post: [], dial: chaosLevel().name }; S.lastSim.post = simPost(); }
 function clearSim() {
   for (const id in S.sim) delete S.picks[id];
   S.sim = {}; clearSimPost(); S.lastSim = null;
@@ -1398,6 +1448,43 @@ function renderTeam() {
   return head + pathTable + own + root + `<p class="note">Odds from ${O.done.toLocaleString()} simulated seasons with your picks locked in. Each season's rankings use this page's committee model.</p>`;
 }
 
+// The Oracle: a crystal ball whose color, swirl speed, sparkle count and face follow the upset dial
+function oracleSvg(lvl) {
+  const m = lvl.mood, cx = 70, cy = 64;
+  const sparks = [[38, 34], [104, 40], [96, 92], [44, 96], [70, 26], [112, 70], [28, 66], [58, 104], [86, 30], [102, 104]]
+    .slice(0, m * 2).map(([x, y], i) => `<path class="spark" style="animation-delay:${(i * 0.37).toFixed(2)}s" d="M${x} ${y - 5}L${x + 1.5} ${y - 1.5}L${x + 5} ${y}L${x + 1.5} ${y + 1.5}L${x} ${y + 5}L${x - 1.5} ${y + 1.5}L${x - 5} ${y}L${x - 1.5} ${y - 1.5}Z"/>`).join('');
+  const eyes = m === 0 ? `<path d="M56 62q4 -3 8 0M76 62q4 -3 8 0" class="ln"/>`
+    : m === 5 ? `<path d="M55 57l9 9M64 57l-9 9M76 57l9 9M85 57l-9 9" class="ln"/>`
+    : `<circle cx="60" cy="61" r="${2.5 + m * 0.6}" class="ey"/><circle cx="80" cy="61" r="${2.5 + m * 0.6}" class="ey"/>`;
+  const mouth = ['M60 76h20', 'M60 75q10 5 20 0', 'M58 74q12 8 24 0', 'M57 73q13 11 26 0', 'M56 72q14 14 28 0Z', 'M62 78q8 -6 16 0'][m];
+  const speed = [24, 14, 9, 5, 2.6, 1.4][m];
+  return `<svg class="orb" viewBox="0 0 140 150" role="img" aria-label="Crystal ball set to ${esc(lvl.name)}">
+    <defs><radialGradient id="orbFill" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#ffffff" stop-opacity=".95"/><stop offset=".35" stop-color="${lvl.glow}"/><stop offset="1" stop-color="${lvl.color}"/></radialGradient>
+      <radialGradient id="orbHalo" r="50%"><stop offset=".6" stop-color="${lvl.glow}" stop-opacity=".55"/><stop offset="1" stop-color="${lvl.glow}" stop-opacity="0"/></radialGradient></defs>
+    <circle cx="${cx}" cy="${cy}" r="${58 + m * 2}" fill="url(#orbHalo)"/>
+    <path d="M38 118h64l-8 -14h-48z" class="stand"/><rect x="30" y="118" width="80" height="12" rx="4" class="stand"/>
+    <circle cx="${cx}" cy="${cy}" r="46" fill="url(#orbFill)" class="ball"/>
+    <g class="swirl" style="animation-duration:${speed}s"><path d="M38 64q16 -26 32 0t32 0" class="sw"/><path d="M44 80q14 14 26 -2t26 -6" class="sw thin"/></g>
+    ${eyes}<path d="${mouth}" class="ln${m === 4 ? ' fill' : ''}"/>
+    <ellipse cx="54" cy="40" rx="11" ry="6" transform="rotate(-30 54 40)" class="shine"/>
+    ${sparks}
+  </svg>`;
+}
+function oracleCard() {
+  const lvl = chaosLevel(), i = CHAOS.indexOf(lvl);
+  const eg = p => fmtPct(dial(p, lvl));
+  return `<section class="oracle" style="--orb:${lvl.color}">
+    ${oracleSvg(lvl)}
+    <div class="oracle-body">
+      <div class="k">The Oracle sees</div>
+      <div class="t">${esc(lvl.name)}</div>
+      <p>${esc(lvl.line)}</p>
+      <input id="f-chaos" type="range" min="0" max="5" step="1" value="${i}" aria-label="How often upsets happen">
+      <div class="stops">${CHAOS.map((c, j) => `<button type="button" data-act="chaos" data-v="${j}" aria-pressed="${j === i}">${esc(c.name)}</button>`).join('')}</div>
+      <p class="hint">At this setting a 60% favorite wins ${eg(0.6)} of the time, a 75% favorite ${eg(0.75)}, and a 90% favorite ${eg(0.9)}.</p>
+    </div>
+  </section>`;
+}
 function renderSim() {
   const open = openGames(), nSim = Object.keys(S.sim).length, nMine = Object.keys(S.picks).length - nSim;
   const L = S.lastSim;
@@ -1407,6 +1494,8 @@ function renderSim() {
     const games = L.games.filter(x => S.sim[x.id]); // drop any the user has since overridden
     const ups = games.filter(x => x.p < 0.5).sort((a, b) => a.p - b.p);
     const expUps = games.reduce((s, x) => s + Math.min(x.p, 1 - x.p), 0);
+    const expDial = games.reduce((s, x) => s + Math.min(x.pa ?? x.p, 1 - (x.pa ?? x.p)), 0);
+    const dialName = L.dial || 'By the book';
     const line = (winner, loser, p, where) => `<li>${chip(winner)}<span class="who"><b>${esc(T[winner] ? T[winner].name : winner)}</b> beat ${esc(T[loser] ? T[loser].name : loser)} <span class="hint">${esc(where)}</span></span><span class="odds" title="Winner's chance going in">${fmtPct(p)}</span></li>`;
     const upList = ups.slice(0, 10).map(x => {
       const g = G[x.id], hw = S.picks[x.id] === 'home';
@@ -1423,10 +1512,10 @@ function renderSim() {
         <section class="card"><h3>Postseason upsets</h3>${postUps ? `<ul class="ups">${postUps}</ul>` : '<p class="hint">The favorite won every title game and playoff game.</p>'}</section>
       </div>
       <div class="champ">${chip(champ)}<div><div class="k">Simulated national champion</div><div class="t">${esc(T[champ].name)} ${esc(T[champ].mascot)}</div></div></div>` : '';
-    recap = `<h2>Last run: ${esc(L.label)}</h2>
+    recap = `<h2>Last run: ${esc(L.label)}${L.dial ? ` <span class="pill">${esc(L.dial)}</span>` : ''}</h2>
       <div class="tiles">
         <div class="tile"><b>${games.length}</b><span>games played</span></div>
-        <div class="tile"><b>${ups.length}</b><span>upsets, about ${expUps.toFixed(1)} expected</span></div>
+        <div class="tile"><b>${ups.length}</b><span>upsets. The real odds expect about ${expUps.toFixed(0)}${dialName !== 'By the book' ? `; "${esc(dialName)}" expects about ${expDial.toFixed(0)}` : ''}</span></div>
         <div class="tile"><b>${games.length ? Math.round((1 - ups.length / games.length) * 100) + '%' : '–'}</b><span>won by the favorite</span></div>
         <div class="tile"><b>${ups.length ? fmtPct(ups[0].p) : '–'}</b><span>biggest upset's odds</span></div>
       </div>
@@ -1434,7 +1523,8 @@ function renderSim() {
       ${post}`;
   }
   return `<h2>Season simulator</h2>
-    <p class="lede">Each game is a weighted coin flip using the ${esc(SOURCES[S.src].label)} win chance. A 50/50 game goes either way equally often, and a team with a 70% chance wins about 7 of every 10 flips. Results show on every tab with a dashed outline. Your own picks are never changed, and re-rolling only replaces simulated results.</p>
+    <p class="lede">Each game is a weighted coin flip using the ${esc(SOURCES[S.src].label)} win chance. Ask the Oracle for more or fewer upsets than the odds expect. On "By the book", a 50/50 game goes either way equally often and a 70% favorite wins about 7 of every 10 flips. Results show on every tab with a dashed outline. Your own picks are never changed, and re-rolling only replaces simulated results.</p>
+    ${oracleCard()}
     <div class="sim-controls">
       <button class="btn primary" type="button" data-act="sim-week">${nextLabel}</button>
       <button class="btn" type="button" data-act="sim-rest">Sim the rest of the season</button>
@@ -1517,6 +1607,7 @@ document.addEventListener('click', e => {
   if (a === 'mx-clear') { const c = S.mxConf; Object.values(confGames(c)).flat().forEach(g => { delete S.picks[g.id]; delete S.sim[g.id]; }); delete S.ccg[c]; delete S.simCcg[c]; return changed(); }
   if (a === 'winout') { const id = b.dataset.v; for (const g of openOwn(id)) { S.picks[g.id] = g.home === id ? 'home' : 'away'; delete S.sim[g.id]; } return changed(); }
   if (a === 'team-clear') { const id = b.dataset.v; for (const g of GAMES) if (!g.final && (g.home === id || g.away === id)) { delete S.picks[g.id]; delete S.sim[g.id]; } return changed(); }
+  if (a === 'chaos') { S.chaos = +b.dataset.v; save(); render(); return; }
   if (a === 'fit-w') { S.w = +b.dataset.v; return changed(); }
   if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
   if (a === 'imp-n') { S.impN = +b.dataset.v; save(); render(); return; }
@@ -1546,6 +1637,7 @@ document.addEventListener('toggle', e => {
 document.addEventListener('change', e => {
   if (e.target.id === 'f-conf') { S.conf = e.target.value; save(); render(); }
   if (e.target.id === 'f-team') { S.impTeam = e.target.value; save(); render(); }
+  if (e.target.id === 'f-chaos') { S.chaos = +e.target.value; save(); render(); }
   if (e.target.id === 'f-imp-team') { S.impTeam = e.target.value; save(); render(); }
   if (e.target.id === 'f-src') { setSource(e.target.value); changed(); }
   if (e.target.id === 'f-h2h') { S.h2h = e.target.checked; changed(); }
