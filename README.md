@@ -6,7 +6,7 @@ Open `index.html` in a browser. It has no build step and needs no server.
 
 ## What it does
 
-- **Pick games.** Every FBS game, week by week. Completed games are locked with their real scores. Tap a team to pick it. Any game you don't pick goes to the favorite.
+- **Pick games.** Every FBS game, week by week. Completed games are locked with their real scores. Tap a team to pick it. A Top 25 filter shows only games with a ranked team, using that week's real AP poll (or CFP rankings once released). Any game you don't pick goes to the favorite.
 - **Standings.** Projected final conference standings from the real results, your picks and the favorites, with a note on how each tie was broken.
 - **Team schedules.** Click any team in Standings, Rankings or Odds to see its full schedule and change its games.
 - **Conference grid.** A head-to-head grid for each conference: one row and column per team, finals filled in, open games one tap to flip, with the standings, title game and playoff picture updating beside it.

@@ -974,7 +974,8 @@ function sideBtn(g, side) {
   const id = g[side], other = g[side === 'home' ? 'away' : 'home'];
   const p = side === 'home' ? pHome(g) : 1 - pHome(g);
   const fcs = !T[id];
-  const r = !fcs && P.rec[id], rank = !fcs && P.rk[id] <= 25 ? `<span class="rk">${P.rk[id]}</span> ` : '';
+  const pr = !fcs && pollRank(id, g.week);
+  const r = !fcs && P.rec[id], rank = pr ? `<span class="rk" title="${esc(pollForWeek(g.week).label)} rank">${pr}</span> ` : '';
   const name = fcs ? esc(g.fcsName || 'FCS opponent') : esc(T[id].name);
   let cls = 'side', right;
   if (g.final) {
@@ -1052,12 +1053,33 @@ function openSheet(id) {
   if (next) dlg.scrollTop = next.closest('.game').offsetTop - dlg.querySelector('.sheet-head').offsetHeight - 70;
 }
 
+// The real poll for a week: the latest CFP ranking (once released), else the latest AP poll, dated on or before
+// that week's first game. Weeks older than every saved poll use the earliest one, flagged as `early`.
+const POLL_WEEK = {};
+function pollForWeek(week) {
+  if (POLL_WEEK[week] !== undefined) return POLL_WEEK[week];
+  const start = GAMES.filter(g => g.week === week).map(g => etDate(g.date)).sort()[0];
+  const pick = kind => {
+    const arch = pollArchive(kind), dates = Object.keys(arch).sort();
+    if (!dates.length) return null;
+    const before = dates.filter(d => d <= start);
+    const d = before.length ? before[before.length - 1] : dates[0];
+    return { kind, date: d, early: !before.length, label: kind === 'cfp' ? 'CFP' : 'AP', ...arch[d] };
+  };
+  const cfp = pick('cfp');
+  return POLL_WEEK[week] = (cfp && !cfp.early ? cfp : null) || pick('ap');
+}
+const pollRank = (id, week) => { const pw = pollForWeek(week); return pw && T[id] ? pw.ranks[id] || null : null; };
+const rankedGame = g => !!(pollRank(g.home, g.week) || pollRank(g.away, g.week));
 function renderPicks() {
   const weeks = [...new Set(GAMES.map(g => g.week))].sort((a, b) => a - b);
   if (S.week == null || !weeks.includes(S.week)) S.week = (GAMES.find(g => !g.final) || GAMES[GAMES.length - 1]).week;
   const q = S.q.trim().toLowerCase();
   const match = id => T[id] && ((!S.conf || T[id].conf === S.conf) && (!q || (T[id].name + ' ' + T[id].abbr + ' ' + T[id].mascot).toLowerCase().includes(q)));
-  const list = GAMES.filter(g => (q ? true : g.week === S.week) && (match(g.home) || match(g.away)));
+  const list = GAMES.filter(g => (q ? true : g.week === S.week) && (match(g.home) || match(g.away)) && (!S.top25 || rankedGame(g)));
+  const pw = pollForWeek(S.week);
+  const pollName = pw ? (pw.name || '').split(' - ').pop() || pw.label + ' poll' : '';
+  const pollNote = !pw ? 'No poll saved yet.' : `Ranks are from the ${esc(pollName)}${pw.early ? ', the earliest poll saved, so they may not match that week' : ''}.`;
   const wkBtns = weeks.map(w => {
     const done = GAMES.filter(g => g.week === w).every(g => g.final);
     return `<button class="wk${done ? ' done' : ''}" type="button" data-act="week" data-v="${w}" aria-pressed="${!q && S.week === w}">${w}</button>`;
@@ -1065,10 +1087,12 @@ function renderPicks() {
   const opts = `<option value="">All conferences</option>` + D.conferences.map(c => `<option value="${c.id}"${S.conf === c.id ? ' selected' : ''}>${esc(c.abbr === 'ind' ? 'Independents' : c.name.replace(' Conference', ''))}</option>`).join('');
   const rows = list.map(g => gameCard(g, !!q)).join('');
   return `<h2>${q ? `Games matching “${esc(S.q)}”` : `Week ${S.week}`}</h2>
-    <p class="lede">Tap a team to pick it. Win chances come from ${SOURCES[S.src].label === 'FPI + Sagarin blend' ? 'an average of ESPN FPI and Sagarin' : SOURCES[S.src].label}, including home field. Hover a percentage to see each source. Records and rankings next to each team update as you pick.</p>
+    <p class="lede">Tap a team to pick it. The small number before a team is its real poll rank. Win chances come from ${SOURCES[S.src].label === 'FPI + Sagarin blend' ? 'an average of ESPN FPI and Sagarin' : SOURCES[S.src].label}, including home field. Hover a percentage to see each source. Records and rankings next to each team update as you pick.</p>
     <div class="filters"><div class="weeks" role="group" aria-label="Week">${wkBtns}</div>
+      <div class="seg" role="group" aria-label="Which games"><button type="button" data-act="top25" data-v="0" aria-pressed="${!S.top25}">All games</button><button type="button" data-act="top25" data-v="1" aria-pressed="${!!S.top25}">Top 25 games</button></div>
       <select id="f-conf" aria-label="Conference">${opts}</select>
       <input id="f-q" type="search" placeholder="Find a team's schedule" value="${esc(S.q)}" aria-label="Team search"></div>
+    <p class="hint" style="margin:-4px 0 10px">${S.top25 ? `Showing ${list.length} game${list.length === 1 ? '' : 's'} with a ranked team. ` : ''}${pollNote}</p>
     <div class="legend"><span><i></i>Projected winner (favorite)</span><span><i class="pk"></i>Your pick</span><span><i class="pk sm"></i>Simulated result</span></div>
     <div class="games">${rows || '<p class="hint">No games match those filters.</p>'}</div>`;
 }
@@ -1723,6 +1747,7 @@ document.addEventListener('click', e => {
   if (a === 'winout') { const id = b.dataset.v; for (const g of openOwn(id)) { S.picks[g.id] = g.home === id ? 'home' : 'away'; delete S.sim[g.id]; } return changed(); }
   if (a === 'team-clear') { const id = b.dataset.v; for (const g of GAMES) if (!g.final && (g.home === id || g.away === id)) { delete S.picks[g.id]; delete S.sim[g.id]; } return changed(); }
   if (a === 'chaos') { S.chaos = +b.dataset.v; save(); render(); return; }
+  if (a === 'top25') { S.top25 = b.dataset.v === '1'; save(); render(); return; }
   if (a === 'asof') { S.asOf = b.dataset.v; save(); render(); return; }
   if (a === 'fit-w') { S.w = +b.dataset.v; return changed(); }
   if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
