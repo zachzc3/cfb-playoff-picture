@@ -131,6 +131,7 @@ h2 .chip { vertical-align: middle; }
 .swing .out { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .swing .out span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .swing .out b { font-size: 16px; }
+.swing .out b small { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .swing .out.up b { color: var(--win); }
 .swing .out.down b { color: var(--loss); }
 .swing .delta { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--pylon); font-weight: 700; }
@@ -1265,9 +1266,10 @@ const teamName = (id, g) => T[id] ? T[id].name : (g.fcsName || 'FCS opponent');
 function impactRows(id, metric, limit, now) {
   return topImpact(id, metric, limit).map((r, i) => {
     const g = r.g, own = g.home === id || g.away === id;
-    const out = (who, p) => `<div class="out ${p > now + 0.005 ? 'up' : p < now - 0.005 ? 'down' : ''}"><span>If ${esc(teamName(who, g))} wins</span><b>${fmtPct(p)}</b></div>`;
+    const what = metric === 'bye' ? 'bye' : 'playoff';
+    const out = (who, p) => `<div class="out ${p > now + 0.005 ? 'up' : p < now - 0.005 ? 'down' : ''}"><span>If ${esc(teamName(who, g))} wins</span><b>${fmtPct(p)} <small>${what}</small></b></div>`;
     return `<div class="imp-row"><div class="n">${i + 1}</div>${gameCard(g, true).replace('<div class="game">', `<div class="game${own ? ' own' : ''}">`)}
-      <div class="swing"><div class="delta">${Math.round(r.swing * 100)}-point swing${own ? ' · own game' : ''}</div>${out(g.away, r.away)}${out(g.home, r.home)}</div></div>`;
+      <div class="swing"><div class="delta">${Math.round(r.swing * 100)}-point swing in ${metric === 'bye' ? 'bye' : 'playoff'} chance${own ? ' · own game' : ''}</div>${out(g.away, r.away)}${out(g.home, r.home)}</div></div>`;
   }).join('');
 }
 function renderImpact() {
@@ -1278,7 +1280,7 @@ function renderImpact() {
   const ready = oddsReady();
   const now = ready ? ODDS.cnt[id][metric] / ODDS.done : null;
   const head = `<h2>Biggest games for ${esc(T[id].name)}</h2>
-    <p class="lede">The open games that move this team's chances the most, its own and everyone else's. Each one compares the simulated seasons where the game went one way with the seasons where it went the other. Tap a team in any game to pick it. Picked games are locked in, so they drop off the list.</p>
+    <p class="lede">The open games that move this team's ${metric === 'bye' ? 'chance of a first-round bye (a top-four seed)' : 'playoff chances'} the most, its own and everyone else's. The numbers on the right are ${metric === 'bye' ? 'bye' : 'playoff'} chances; the line under each team in a game is always its playoff chance. Each one compares the simulated seasons where the game went one way with the seasons where it went the other. Tap a team in any game to pick it. Picked games are locked in, so they drop off the list.</p>
     <div class="imp-head"><select id="f-imp-team" aria-label="Team">${opts}</select>
       ${seg('imp-metric', metric, Object.entries(METRICS))}${seg('imp-n', limit, [[25, 'Top 25'], [50, 'Top 50']])}
       ${ready ? `<div class="now">${esc(METRICS[metric])} now <b>${fmtPct(now)}</b></div>` : ''}</div>`;
