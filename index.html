@@ -195,6 +195,23 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
 .weigh input { width: min(260px, 60vw); accent-color: var(--pylon); }
 .weigh label { font-weight: 600; }
 .cut td { border-top: 2px dashed var(--pylon); }
+.chart { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 10px 8px; max-width: 760px; }
+.chart svg { width: 100%; height: auto; display: block; font-family: var(--data); }
+.chart .gl { stroke: var(--line); stroke-width: 1; }
+.chart .ax { fill: var(--muted); font-size: 12px; }
+.chart .ol { fill: none; stroke: var(--turf); stroke-width: 2.5; stroke-linejoin: round; }
+.chart .el { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.chart .pt { fill: var(--turf); stroke: var(--surface); stroke-width: 1.5; }
+.chart .ept { fill: var(--muted); }
+.chart .gm rect { fill: var(--turf-soft); }
+.chart .gm.l rect { fill: var(--pylon-soft); }
+.chart .gm text { font-size: 11px; font-weight: 700; fill: var(--win); }
+.chart .gm.l text { fill: var(--loss); }
+.chart figcaption { font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 4px; }
+.chart .k { display: inline-block; width: 18px; height: 0; border-top: 2.5px solid var(--turf); vertical-align: middle; margin-right: 4px; }
+.chart .k.el { border-top: 1.5px dashed var(--muted); }
+.path { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--pylon); border-radius: 8px; padding: 4px 14px; max-width: 80ch; }
+.path p { margin: 10px 0; }
 /* conference grid */
 .mx-confs { flex-wrap: wrap; }
 .mx-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 16px; align-items: start; }
@@ -290,6 +307,7 @@ th.espn { color: var(--muted); opacity: .8; }
 </div>
 
 <script src="data/season.js?v=3"></script>
+<script src="data/history.js"></script>
 <script>
 // A browser can hold an older cached copy of the data file that lacks fields this page needs; fetch a fresh one.
 if (!window.CFB_DATA || !window.CFB_DATA.polls) document.write('<script src="data/season.js?t=' + Date.now() + '"><\/script>');
@@ -333,7 +351,7 @@ const SOURCES = {
   sag: { label: 'Sagarin', hfa: RT.sagHfa },
 };
 function rateFrom(src, fpi, sagPts) { return src === 'fpi' ? fpi : src === 'sag' ? sagPts : (fpi + sagPts) / 2; }
-let R, HFA, BASE, zPow, FCS_R;
+let R, HFA, BASE, zPow, FCS_R, POW_M, POW_SD;
 function setSource(src) {
   if (!SOURCES[src]) src = 'blend';
   S.src = src; HFA = SOURCES[src].hfa; R = {};
@@ -342,12 +360,23 @@ function setSource(src) {
   const order = [...FBS].sort((a, b) => R[b] - R[a]);
   BASE = R[order[11]]; // a typical playoff-caliber team
   const m = mean(FBS.map(i => R[i])), sd = sdev(FBS.map(i => R[i]));
+  POW_M = m; POW_SD = sd;
   zPow = Object.fromEntries(FBS.map(i => [i, (R[i] - m) / sd]));
 }
+// Inside a simulated season, each team plays at a "true" strength drawn around its rating (SIMR), because the
+// ratings are estimates. The game-to-game spread shrinks to match, so a single game's odds are unchanged, but
+// a team that's stronger than its rating stays stronger all season, the way it does in real life.
+const SIM_SD = 4.5, SD_TRUE = Math.sqrt(SD * SD - 2 * SIM_SD * SIM_SD);
+// After each result, the rating the committee sees moves toward what happened: OBS_K points times the surprise.
+const OBS_K = 3;
+let SIMR = null;
 const rOf = (id, g) => T[id] ? R[id] : FCS_R(g);
 const loc = (g, id) => g.neutral ? 0 : (g.home === id ? HFA : -HFA);
-const pWin = (a, b, edge = 0) => Phi((R[a] - R[b] + edge) / SD);
-const pHome = g => Phi((rOf(g.home, g) - rOf(g.away, g) + loc(g, g.home)) / SD);
+const pWin = (a, b, edge = 0) => SIMR ? Phi((SIMR[a] - SIMR[b] + edge) / SD_TRUE) : Phi((R[a] - R[b] + edge) / SD);
+const rTrue = (id, g) => SIMR && T[id] ? SIMR[id] : rOf(id, g);
+const pHome = g => Phi((rTrue(g.home, g) - rTrue(g.away, g) + loc(g, g.home)) / (SIMR ? SD_TRUE : SD));
+// The published (rating-based) chance, used to measure how surprising a result was
+const pHomePub = g => Phi((rOf(g.home, g) - rOf(g.away, g) + loc(g, g.home)) / SD);
 const spreadFor = (src, a, b, g) => {
   const r = id => T[id] ? rateFrom(src, T[id].fpi, T[id].sag - SAG_MEAN) : (s => rateFrom(src, s * SAG_TO_FPI, s))((g.fcsSag ?? FCS_SAG) - SAG_MEAN);
   return r(a) - r(b) + (g.neutral ? 0 : (g.home === a ? 1 : -1) * SOURCES[src].hfa);
@@ -569,13 +598,24 @@ function sortConf(ids, rec, log, tb) {
   }
   return out;
 }
+function gauss(rng) { let u = 0; while (!u) u = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng()); }
 function runSeason(mode, rng, w, trace) {
+  if (mode === 'sim') { SIMR = {}; FBS.forEach(i => SIMR[i] = R[i] + SIM_SD * gauss(rng)); }
+  try { return seasonBody(mode, rng, w, trace); } finally { SIMR = null; }
+}
+function seasonBody(mode, rng, w, trace) {
   const rec = {}; FBS.forEach(i => rec[i] = { w: 0, l: 0, cw: 0, cl: 0, res: [] });
+  const obs = {}; FBS.forEach(i => obs[i] = 0);
   for (const g of GAMES) {
     let hw;
     if (g.final) hw = g.hs > g.as;
     else if (S.picks[g.id]) hw = S.picks[g.id] === 'home';
     else hw = mode === 'sim' ? rng() < pHome(g) : pHome(g) >= 0.5;
+    if (!g.final) {
+      const surprise = (hw ? 1 : 0) - pHomePub(g);
+      if (T[g.home]) obs[g.home] += OBS_K * surprise;
+      if (T[g.away]) obs[g.away] -= OBS_K * surprise;
+    }
     if (trace && ODDS.openIdx[g.id] !== undefined) trace[ODDS.openIdx[g.id]] = hw ? 1 : 0;
     const isConf = g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf && T[g.home].conf !== IND;
     addResult(rec, g, hw, isConf);
@@ -611,7 +651,7 @@ function runSeason(mode, rng, w, trace) {
   const sv = FBS.map(i => sor[i]), sm = mean(sv), ssd = sdev(sv) || 1;
   const champSet = new Set(Object.values(champs)), wp = w / 100;
   const score = {};
-  FBS.forEach(i => score[i] = wp * zPow[i] + (1 - wp) * (sor[i] - sm) / ssd - LOSS_W * rl[i] + (champSet.has(i) ? 0.15 : 0));
+  FBS.forEach(i => score[i] = wp * (R[i] + obs[i] - POW_M) / POW_SD + (1 - wp) * (sor[i] - sm) / ssd - LOSS_W * rl[i] + (champSet.has(i) ? 0.15 : 0));
   const ranked = [...FBS].sort((a, b) => score[b] - score[a]);
   const h2h = S.h2h ? applyHeadToHead(ranked, rec, score, rl) : {};
   const rk = {}; ranked.forEach((id, i) => rk[id] = i + 1);
@@ -621,7 +661,7 @@ function runSeason(mode, rng, w, trace) {
   for (const id of ranked) { if (field.size >= 12) break; field.add(id); }
   const seeds = [...field].sort((a, b) => rk[a] - rk[b]);
   const bracket = playBracket(seeds, mode, rng);
-  return { rec, st, ccg, champs, champSet, sor, rl, score, ranked, rk, h2h, auto: new Set(auto), seeds, bracket };
+  return { rec, st, ccg, champs, champSet, sor, rl, score, ranked, rk, h2h, obs, auto: new Set(auto), seeds, bracket };
 }
 // The committee uses head-to-head to separate comparable teams: a team that beat a higher-ranked team
 // moves directly ahead of it when it has no more losses (title-game losses aside) and the two are close on the
@@ -1209,6 +1249,81 @@ function recordPaths(id) {
   }
   return Object.values(rows).sort((a, b) => a.l - b.l).map(r => ({ ...r, share: r.n / n }));
 }
+// Odds over time: one point per daily snapshot (no picks, default settings), ours and ESPN's, with the team's
+// results between snapshots marked along the bottom.
+const etDate = iso => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+const shortDate = d => new Date(d + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+function oddsChart(id) {
+  const H = window.CFB_HISTORY;
+  if (!H || !H.dates.length || !H.ours[id]) return `<p class="hint">Odds history starts with the first daily snapshot and adds a point each day.</p>`;
+  const dates = H.dates, ours = H.ours[id], espn = H.espn[id] || [], n = dates.length;
+  const W = 640, Hh = 210, L = 40, Rr = 14, Tp = 12, B = 46;
+  const x = k => n === 1 ? (L + W - Rr) / 2 : L + k * (W - L - Rr) / (n - 1);
+  const y = v => Tp + (1 - v / 100) * (Hh - Tp - B);
+  const grid = [0, 25, 50, 75, 100].map(v => `<line x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}" class="gl"/><text x="${L - 6}" y="${y(v) + 4}" class="ax" text-anchor="end">${v}%</text>`).join('');
+  const line = (vals, cls) => {
+    const pts = vals.map((v, k) => v == null ? null : [x(k), y(v)]).filter(Boolean);
+    return pts.length > 1 ? `<polyline class="${cls}" points="${pts.map(p => p.join(',')).join(' ')}"/>` : '';
+  };
+  const dots = ours.map((v, k) => v == null ? '' : `<circle cx="${x(k)}" cy="${y(v)}" r="${k === n - 1 ? 5 : 3.5}" class="pt"><title>${shortDate(dates[k])}: ${v}% (ESPN ${espn[k] ?? '–'}%)</title></circle>`).join('');
+  const edots = espn.map((v, k) => v == null ? '' : `<circle cx="${x(k)}" cy="${y(v)}" r="2.5" class="ept"/>`).join('');
+  // Games the team played between one snapshot and the next
+  const marks = dates.map((d, k) => {
+    const prev = k ? dates[k - 1] : '0000';
+    const gs = GAMES.filter(g => g.final && (g.home === id || g.away === id) && etDate(g.date) > prev && etDate(g.date) <= d);
+    if (!k || !gs.length) return '';
+    return gs.map((g, j) => {
+      const home = g.home === id, won = home ? g.hs > g.as : g.as > g.hs, opp = home ? g.away : g.home;
+      return `<g class="gm ${won ? 'w' : 'l'}"><title>${won ? 'Won' : 'Lost'} ${home ? 'vs.' : 'at'} ${esc(teamName(opp, g))}, ${home ? g.hs : g.as}-${home ? g.as : g.hs}</title>
+        <rect x="${x(k) - 9}" y="${Hh - B + 8 + j * 16}" width="18" height="14" rx="3"/><text x="${x(k)}" y="${Hh - B + 19 + j * 16}" text-anchor="middle">${won ? 'W' : 'L'}</text></g>`;
+    }).join('');
+  }).join('');
+  const labelIdx = n === 1 ? [0] : [...new Set([0, Math.floor((n - 1) / 2), n - 1])];
+  const xl = labelIdx.map(k => `<text x="${x(k)}" y="${Hh - 4}" class="ax" text-anchor="middle">${shortDate(dates[k])}</text>`).join('');
+  const last = ours[n - 1], first = ours.find(v => v != null);
+  const note = n === 1 ? `History started ${shortDate(dates[0])}. A new point is added after each day's update.`
+    : `${sgn(last - first).replace('.0', '')} points since ${shortDate(dates[0])}.`;
+  return `<figure class="chart"><svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Playoff chance over time">${grid}${line(espn, 'el')}${line(ours, 'ol')}${edots}${dots}${marks}${xl}</svg>
+    <figcaption><span class="k ol"></span>Our playoff chance <span class="k el"></span>ESPN FPI <span class="hint">· ${note} Snapshots use no picks and the default settings.</span></figcaption></figure>`;
+}
+// Plain-English summary of how a team gets in: its most common route, which records are safe or on the
+// bubble, and the remaining games it can least afford to lose.
+function pathSummary(id, paths, isInd) {
+  const O = ODDS, t = T[id], ng = NG[id], n = O.done, now = O.cnt[id].cfp / n;
+  const rec = l => `${ng - l}-${l}`;
+  if (now >= 0.995) return `<div class="path"><p><b>${esc(t.name)} is in.</b> It made the playoff in all but a handful of the ${n.toLocaleString()} simulated seasons.</p></div>`;
+  if (O.cnt[id].cfp < 20) return `<div class="path"><p><b>${esc(t.name)} is a long shot.</b> It made the playoff in ${O.cnt[id].cfp} of ${n.toLocaleString()} simulated seasons.</p></div>`;
+  const conf = isInd ? '' : CONF_SHORT[CONF[t.conf].abbr] || CONF[t.conf].name.replace(' Conference', '');
+  const routes = [];
+  for (const p of paths) {
+    if (isInd) routes.push({ l: p.l, n: p.cfp });
+    else { routes.push({ l: p.l, champ: true, n: p.champIn }); routes.push({ l: p.l, champ: false, n: p.notIn }); }
+  }
+  const best = routes.sort((a, b) => b.n - a.n)[0];
+  const lines = [`<p><b>Most common way in:</b> finish ${rec(best.l)}${isInd ? '' : best.champ ? ` and win the ${esc(conf)}` : ` without winning the ${esc(conf)}`}, which accounts for ${fmtPct(best.n / O.cnt[id].cfp)} of its playoff trips.</p>`];
+  const solid = paths.filter(p => p.n >= 40);
+  const safe = solid.filter(p => p.cfp / p.n >= 0.9).sort((a, b) => b.l - a.l)[0];
+  const bubble = solid.filter(p => p.cfp / p.n >= 0.1 && p.cfp / p.n < 0.9);
+  const dead = solid.filter(p => p.cfp / p.n < 0.1).sort((a, b) => a.l - b.l)[0];
+  const parts = [];
+  if (safe) {
+    const worst = Math.min(...solid.filter(p => p.l <= safe.l).map(p => p.cfp / p.n));
+    parts.push(worst >= 0.995 ? `${rec(safe.l)} or better is a lock` : `${rec(safe.l)} or better gets in at least ${fmtPct(worst)} of the time`);
+  }
+  bubble.forEach(p => parts.push(`${rec(p.l)} is the bubble at ${fmtPct(p.cfp / p.n)}`));
+  if (dead) parts.push(`${rec(dead.l)} almost never does (${fmtPct(dead.cfp / dead.n)})`);
+  if (parts.length) lines.push(`<p><b>What it needs:</b> ${parts.join('; ')}.</p>`);
+  const must = topImpact(id, 'cfp', 60).filter(x => x.g.home === id || x.g.away === id)
+    .sort((a, b) => b.swing - a.swing).slice(0, 3).sort((a, b) => a.g.date.localeCompare(b.g.date));
+  if (must.length) {
+    lines.push(`<p><b>Games it can least afford to lose:</b> ${must.map(x => {
+      const g = x.g, home = g.home === id, opp = home ? g.away : g.home;
+      const win = home ? x.home : x.away, loss = home ? x.away : x.home;
+      return `${home ? 'vs.' : 'at'} ${esc(teamName(opp, g))} (week ${g.week}): ${fmtPct(win)} with a win, ${fmtPct(loss)} with a loss`;
+    }).join('; ')}.</p>`);
+  }
+  return `<div class="path">${lines.join('')}</div>`;
+}
 function rootRow(r, id) {
   const g = r.g, fan = r.home >= r.away ? 'home' : 'away';
   const want = g[fan], other = g[fan === 'home' ? 'away' : 'home'];
@@ -1244,7 +1359,9 @@ function renderTeam() {
   const ng = NG[id], cell = (k, d) => d >= 20 ? fmtPct(k / d) : '–';
   const pathRows = paths.map(p => `<tr><td class="n">${ng - p.l}-${p.l}</td><td style="width:22%"><div class="bar o" title="${(p.share * 100).toFixed(1)}%"><b style="width:${(p.share * 100).toFixed(1)}%"></b></div></td><td class="n">${fmtPct(p.share)}</td>
     <td class="n"><b>${fmtPct(p.cfp / p.n)}</b></td><td class="n">${fmtPct(p.bye / p.n)}</td>${isInd ? '' : `<td class="n">${cell(p.champIn, p.champ)}</td><td class="n">${cell(p.notIn, p.notChamp)}</td>`}</tr>`).join('');
-  const pathTable = `<h2>What each record is worth</h2>
+  const pathTable = `<h2>Playoff odds over time</h2>${oddsChart(id)}
+    <h2>Path to the playoff</h2>${pathSummary(id, recordPaths(id), isInd)}
+    <h2>What each record is worth</h2>
     <p class="lede">The regular-season records ${esc(t.name)} finished with across ${O.done.toLocaleString()} simulated seasons, how often each happened, and how often it was enough.${isInd ? '' : ' The last two columns split those seasons by whether it also won its conference. A dash means too few seasons to say.'}</p>
     <div class="scroll"><table><thead><tr><th class="n">Record</th><th></th><th class="n">How often</th><th class="n">Playoff</th><th class="n">Bye</th>${isInd ? '' : '<th class="n">If champ</th><th class="n">If not</th>'}</tr></thead><tbody>${pathRows}</tbody></table></div>`;
   // Its remaining games, then other games to root for

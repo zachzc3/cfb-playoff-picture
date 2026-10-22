@@ -22,10 +22,15 @@ Picks are saved in your browser.
 
 ## The model
 
+- **Rating uncertainty:** in each simulated season every team plays at a "true" strength drawn around its rating (standard deviation 4.5 points), and the per-game spread shrinks to keep single-game odds unchanged. The rating the committee sees also moves 3 points per unit of surprise after each result. Together these bring our playoff odds within about 5 points of ESPN's for the top teams.
 - **Win probability:** from [ESPN FPI](https://www.espn.com/college-football/fpi), [Sagarin's PREDICTOR](http://sagarin.com/sports/cfsend.htm), or an average of the two (the default). Pick the source in the app. The spread is the rating difference plus home field (Sagarin's published edge, about 3.8 points; 2.5 points for FPI, an estimate). Win chance is a normal distribution around that spread with a 14-point standard deviation. Sagarin also rates FCS teams, so FCS opponents get real ratings.
 - **Résumé:** for each game, a win minus the chance a typical playoff team (the #12 rated team) would win the same game.
 - **Committee ranking:** a blend of résumé and rating, with a small bonus for conference champions. With head-to-head on, a team that beat a higher-ranked team moves directly ahead of it when it has the same or fewer losses and the two are comparable. Three-way loops cancel out.
 - **Conference tiebreakers:** each conference uses its own published procedure (SEC, Big Ten, Big 12, ACC, American, MAC, Mountain West, Pac-12, Sun Belt by division), with separate two-team and multi-team steps. Steps the app can't compute, such as SportSource ratings, CFP rankings or computer composites, use the team rating as a stand-in and are marked ≈. Conference USA doesn't post its procedure, so it uses the generic order: head-to-head, common opponents, best common opponent, strength of schedule, then team rating. Each Standings card has a Tiebreakers section with that conference's steps and a link to the official rules, and notes which step settled each tie.
+
+## Odds over time
+
+`scripts/snapshot_odds.py` opens the site in a headless browser (Playwright) with no picks, waits for its simulations, and records every team's playoff chance, ours and ESPN's, in `data/history.js`. The GitHub Action runs it after each data update; a later run on the same day replaces that day's numbers. Each Team page charts the history.
 
 ## Updating the data
 
