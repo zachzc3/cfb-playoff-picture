@@ -196,6 +196,9 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
 .weigh input { width: min(260px, 60vw); accent-color: var(--pylon); }
 .weigh label { font-weight: 600; }
 .cut td { border-top: 2px dashed var(--pylon); }
+.seg.asof { flex-wrap: wrap; }
+td.espn small { font-size: 11px; color: var(--muted); margin-left: 3px; }
+td.espn small.off { color: var(--pylon); font-weight: 700; }
 /* the Oracle */
 .oracle { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 18px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 4px 0 16px; max-width: 760px; }
 @media (max-width: 520px) { .oracle { grid-template-columns: 1fr; justify-items: center; text-align: center; } .oracle .stops { justify-content: center; } }
@@ -632,14 +635,17 @@ function sortConf(ids, rec, log, tb) {
   return out;
 }
 function gauss(rng) { let u = 0; while (!u) u = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng()); }
-function runSeason(mode, rng, w, trace) {
+// upto: rank on games through that week only (no title games), like a mid-season committee ranking.
+// 'now' means completed games only.
+function runSeason(mode, rng, w, trace, upto) {
   if (mode === 'sim') { SIMR = {}; FBS.forEach(i => SIMR[i] = R[i] + SIM_SD * gauss(rng)); }
-  try { return seasonBody(mode, rng, w, trace); } finally { SIMR = null; }
+  try { return seasonBody(mode, rng, w, trace, upto); } finally { SIMR = null; }
 }
-function seasonBody(mode, rng, w, trace) {
+function seasonBody(mode, rng, w, trace, upto) {
   const rec = {}; FBS.forEach(i => rec[i] = { w: 0, l: 0, cw: 0, cl: 0, res: [] });
   const obs = {}; FBS.forEach(i => obs[i] = 0);
   for (const g of GAMES) {
+    if (upto != null && (upto === 'now' ? !g.final : g.week > upto)) continue;
     let hw;
     if (g.final) hw = g.hs > g.as;
     else if (S.picks[g.id]) hw = S.picks[g.id] === 'home';
@@ -653,6 +659,7 @@ function seasonBody(mode, rng, w, trace) {
     const isConf = g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf && T[g.home].conf !== IND;
     addResult(rec, g, hw, isConf);
   }
+  if (upto != null) return rankingAsOf(rec, obs, w);
   // standings and title games
   const st = {}, ccg = {}, champs = {};
   for (const c of D.conferences) {
@@ -669,8 +676,32 @@ function seasonBody(mode, rng, w, trace) {
     addResult(rec, { home: hi, away: lo, neutral: true }, win === hi, false);
     rec[hi].res[rec[hi].res.length - 1].ccg = rec[lo].res[rec[lo].res.length - 1].ccg = true;
   }
-  // committee-style ranking: blend of power rating and strength of record, less a cost per loss. A conference
-  // title game can only help: the winner banks the win and the champion's bump, and the loser isn't charged.
+  const champSet = new Set(Object.values(champs));
+  const { sor, rl, score, ranked, rk, h2h } = rankTeams(rec, obs, w, champSet);
+  // 12-team field: five highest-ranked conference champions + seven at-large, seeded straight by ranking
+  const { auto, seeds } = pickField(ranked, rk, champSet);
+  const bracket = playBracket(seeds, mode, rng);
+  return { rec, st, ccg, champs, champSet, sor, rl, score, ranked, rk, h2h, obs, auto: new Set(auto), seeds, bracket };
+}
+// A ranking partway through the season: no title games yet, and, as on the committee's weekly bracket, the
+// highest-ranked team in each conference stands in as its champion.
+function rankingAsOf(rec, obs, w) {
+  const { sor, rl, score, ranked, rk, h2h } = rankTeams(rec, obs, w, new Set());
+  const champs = {};
+  for (const id of ranked) { const c = T[id].conf; if (c !== IND && !champs[c]) champs[c] = id; }
+  const champSet = new Set(Object.values(champs));
+  const { auto, seeds } = pickField(ranked, rk, champSet);
+  return { rec, sor, rl, score, ranked, rk, h2h, champs, champSet, auto: new Set(auto), seeds, partial: true };
+}
+function pickField(ranked, rk, champSet) {
+  const auto = [...champSet].sort((a, b) => rk[a] - rk[b]).slice(0, 5);
+  const field = new Set(auto);
+  for (const id of ranked) { if (field.size >= 12) break; field.add(id); }
+  return { auto, seeds: [...field].sort((a, b) => rk[a] - rk[b]) };
+}
+// committee-style ranking: blend of power rating and strength of record, less a cost per loss. A conference
+// title game can only help: the winner banks the win and the champion's bump, and the loser isn't charged.
+function rankTeams(rec, obs, w, champSet) {
   const sor = {}, rl = {};
   FBS.forEach(i => {
     let s = 0, l = 0;
@@ -682,19 +713,13 @@ function seasonBody(mode, rng, w, trace) {
     sor[i] = s; rl[i] = l;
   });
   const sv = FBS.map(i => sor[i]), sm = mean(sv), ssd = sdev(sv) || 1;
-  const champSet = new Set(Object.values(champs)), wp = w / 100;
+  const wp = w / 100;
   const score = {};
   FBS.forEach(i => score[i] = wp * (R[i] + obs[i] - POW_M) / POW_SD + (1 - wp) * (sor[i] - sm) / ssd - lossCost(rl[i]) + (champSet.has(i) ? CM.champB : 0));
   const ranked = [...FBS].sort((a, b) => score[b] - score[a]);
   const h2h = S.h2h ? applyHeadToHead(ranked, rec, score, rl) : {};
   const rk = {}; ranked.forEach((id, i) => rk[id] = i + 1);
-  // 12-team field: five highest-ranked conference champions + seven at-large, seeded straight by ranking
-  const auto = [...champSet].sort((a, b) => rk[a] - rk[b]).slice(0, 5);
-  const field = new Set(auto);
-  for (const id of ranked) { if (field.size >= 12) break; field.add(id); }
-  const seeds = [...field].sort((a, b) => rk[a] - rk[b]);
-  const bracket = playBracket(seeds, mode, rng);
-  return { rec, st, ccg, champs, champSet, sor, rl, score, ranked, rk, h2h, obs, auto: new Set(auto), seeds, bracket };
+  return { sor, rl, score, ranked, rk, h2h };
 }
 // The committee uses head-to-head to separate comparable teams: a team that beat a higher-ranked team
 // moves directly ahead of it when it has no more losses (title-game losses aside) and the two are close on the
@@ -1214,7 +1239,86 @@ function fitToPoll() {
   fitToPoll.cache = { key, val: best };
   return best;
 }
+// The committee's 2026 release schedule, assumed from 2025's pattern: first rankings on the first Tuesday of
+// November, then every Tuesday, and the final rankings the Sunday after the title games.
+const RELEASES = [
+  { key: 'now', label: 'Now', sub: 'Completed games only', upto: 'now' },
+  { key: '2026-11-03', label: 'Nov 3', sub: 'First CFP rankings, through week 9', upto: 9 },
+  { key: '2026-11-10', label: 'Nov 10', sub: 'Through week 10', upto: 10 },
+  { key: '2026-11-17', label: 'Nov 17', sub: 'Through week 11', upto: 11 },
+  { key: '2026-11-24', label: 'Nov 24', sub: 'Through week 12', upto: 12 },
+  { key: '2026-12-01', label: 'Dec 1', sub: 'Through week 13', upto: 13 },
+  { key: 'final', label: 'Dec 6', sub: 'Final rankings, after the title games', upto: null },
+];
+// Every AP and CFP ranking seen so far: saved daily in history.js, plus whatever is in today's data
+function pollArchive(kind) {
+  const out = {};
+  const H = window.CFB_HISTORY;
+  if (H && H.polls && H.polls[kind]) Object.assign(out, H.polls[kind]);
+  const cur = (D.polls || {})[kind];
+  if (cur && cur.date) out[cur.date.slice(0, 10)] = { name: cur.headline || cur.name, ranks: cur.ranks };
+  return out;
+}
+const dayDiff = (a, b) => Math.abs(new Date(a + 'T12:00:00') - new Date(b + 'T12:00:00')) / 864e5;
+// The real ranking to compare a view with: the CFP ranking released within two days of that date, or for "Now"
+// the latest CFP ranking, else the latest AP poll
+function realRankingFor(rel) {
+  const cfp = pollArchive('cfp'), ap = pollArchive('ap');
+  if (rel.key === 'now') {
+    const pick = (arch, label) => { const d = Object.keys(arch).sort().pop(); return d ? { label, date: d, ...arch[d] } : null; };
+    return pick(cfp, 'CFP') || pick(ap, 'AP');
+  }
+  if (rel.key === 'final') return null;
+  const d = Object.keys(cfp).find(k => dayDiff(k, rel.key) <= 2);
+  return d ? { label: 'CFP', date: d, ...cfp[d] } : null;
+}
+function renderRankAsOf(rel) {
+  const Q = runSeason('pick', null, S.w, null, rel.upto);
+  const real = realRankingFor(rel);
+  const rows = Q.ranked.slice(0, 30).map((id, i) => {
+    const r = Q.rec[id], tags = [];
+    const seed = Q.seeds.indexOf(id);
+    if (Q.champSet.has(id) && seed >= 0) tags.push('<span class="pill">Conf. leader</span>');
+    if (Q.h2h[id]) tags.push(`<span class="pill" title="Moved ahead of ${esc(T[Q.h2h[id]].name)} on head-to-head">Beat ${esc(T[Q.h2h[id]].abbr)}</span>`);
+    if (seed >= 0) tags.push(`<span class="pill g">${seed < 4 ? 'Bye · ' : ''}Seed ${seed + 1}</span>`);
+    const rr = real && real.ranks[id];
+    const diff = rr ? rr - (i + 1) : null;
+    return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td>${teamCell(id)}</td>
+      <td class="n">${recStr(r)}</td><td class="hide-sm">${esc(CONF[T[id].conf].abbr.toUpperCase())}</td>
+      <td class="n">${sgn(Q.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td>
+      ${real ? `<td class="n espn">${rr || ''}${diff ? ` <small class="${Math.abs(diff) >= 4 ? 'off' : ''}">${diff > 0 ? '+' : ''}${diff}</small>` : ''}</td>` : ''}<td>${tags.join(' ')}</td></tr>`;
+  }).join('');
+  let score = '';
+  if (real) {
+    const ranked = Object.entries(real.ranks).filter(([id]) => T[id]);
+    const miss = mean(ranked.map(([id, r]) => Math.abs(Math.min(Q.rk[id], 40) - r)));
+    const real12 = new Set(ranked.filter(([, r]) => r <= 12).map(([id]) => id));
+    const both = Q.ranked.slice(0, 12).filter(id => real12.has(id)).length;
+    const worst = ranked.map(([id, r]) => ({ id, r, d: Math.min(Q.rk[id], 40) - r })).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
+    score = `<div class="tiles">
+      <div class="tile"><b>${miss.toFixed(1)}</b><span>spots off per team, on average, against the real ${esc(real.label)} top 25</span></div>
+      <div class="tile"><b>${both} of 12</b><span>teams in the real top 12 are also in our top 12</span></div>
+      <div class="tile"><b>${worst.map(x => esc(T[x.id].abbr)).join(', ')}</b><span>biggest misses: ${worst.map(x => `${esc(T[x.id].abbr)} ours #${Math.min(Q.rk[x.id], 40)}${Q.rk[x.id] > 40 ? '+' : ''}, real #${x.r}`).join('; ')}</span></div>
+    </div>`;
+  }
+  const realNote = real ? ` The gray column is the real ${esc(real.label)} ranking (${esc((real.name || '').split(' - ').pop())}), with how many spots it differs from ours.`
+    : rel.key === 'now' ? '' : ' Once the committee releases this ranking, it shows here next to ours, with a score for how close we got.';
+  const lede = rel.key === 'now'
+    ? `How the committee model ranks teams on completed games only, before any picks or projections.${realNote}`
+    : `Our projection of the committee's ranking on ${esc(rel.label)} (expected date), using games through week ${rel.upto}: real results so far, then your picks or the favorite for the rest. There are no title games yet, so, as on the committee's weekly bracket, each conference's highest-ranked team stands in as its champion.${realNote}`;
+  return { lede, score, table: `<div class="scroll"><table><thead><tr><th class="n">#</th><th>Team</th><th class="n">Rec</th><th class="hide-sm">Conf</th><th class="n">Résumé</th><th class="n hide-sm">Power</th>${real ? `<th class="n espn">${esc(real.label)}</th>` : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>` };
+}
 function renderRank() {
+  const rel = RELEASES.find(r => r.key === S.asOf) || RELEASES[RELEASES.length - 1];
+  const picker = `<div class="filters"><div class="seg asof" role="group" aria-label="Rankings as of">${RELEASES.map(r => `<button type="button" data-act="asof" data-v="${r.key}" aria-pressed="${r === rel}" title="${esc(r.sub)}">${esc(r.label)}</button>`).join('')}</div>
+    <span class="hint">${esc(rel.sub)}${rel.key !== 'now' && rel.key !== 'final' ? ' · expected date' : ''}</span></div>`;
+  const slider = `<div class="weigh"><label for="f-w">Committee leans on</label><span class="hint">Résumé</span>
+      <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span>
+      <label class="hint"><input id="f-h2h" type="checkbox"${S.h2h ? ' checked' : ''}> Honor head-to-head</label></div>`;
+  if (rel.key !== 'final') {
+    const v = renderRankAsOf(rel);
+    return `<h2>${rel.key === 'now' ? 'Committee rankings on results so far' : `Projected CFP rankings, ${esc(rel.label)}`}</h2>${picker}<p class="lede">${v.lede}</p>${slider}${v.score}${v.table}`;
+  }
   const rows = P.ranked.slice(0, 30).map((id, i) => {
     const r = P.rec[id], tags = [];
     if (P.champSet.has(id)) tags.push('<span class="pill">Champ</span>');
@@ -1230,7 +1334,7 @@ function renderRank() {
   const fitBox = fit ? `<div class="weigh fit"><div><b>${esc(pollLabel)}:</b> the model's ranking of results so far lines up best with the ${esc(pollLabel)} at <b>${fit.w}% power</b>,
       missing by ${fit.miss.toFixed(1)} spots per team on average.${pollKey === 'ap' ? ' The CFP committee rankings replace the AP poll here once they come out in early November.' : ''}</div>
       <button class="btn" type="button" data-act="fit-w" data-v="${fit.w}"${fit.w === S.w ? ' disabled' : ''}>${fit.w === S.w ? 'Matched' : 'Match the ' + (pollKey === 'cfp' ? 'committee' : 'AP poll')}</button></div>` : '';
-  return `<h2>Projected final committee rankings</h2>
+  return `<h2>Projected final committee rankings</h2>${picker}
     <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. Each regular-season loss also costs a set amount on top of what it does to the résumé, since the committee sorts heavily by losses. A conference title game can only help: the winner gets credit, and the loser isn't charged for the loss, the way the committee has treated title-game losers. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.${poll ? ` The gray ${esc(pollLabel)} column is the real ranking today, from the ${esc((poll.headline || poll.name).split(' - ').pop())}.` : ''}</p>
     <div class="weigh"><label for="f-w">Committee leans on</label><span class="hint">Résumé</span>
       <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span>
@@ -1619,6 +1723,7 @@ document.addEventListener('click', e => {
   if (a === 'winout') { const id = b.dataset.v; for (const g of openOwn(id)) { S.picks[g.id] = g.home === id ? 'home' : 'away'; delete S.sim[g.id]; } return changed(); }
   if (a === 'team-clear') { const id = b.dataset.v; for (const g of GAMES) if (!g.final && (g.home === id || g.away === id)) { delete S.picks[g.id]; delete S.sim[g.id]; } return changed(); }
   if (a === 'chaos') { S.chaos = +b.dataset.v; save(); render(); return; }
+  if (a === 'asof') { S.asOf = b.dataset.v; save(); render(); return; }
   if (a === 'fit-w') { S.w = +b.dataset.v; return changed(); }
   if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
   if (a === 'imp-n') { S.impN = +b.dataset.v; save(); render(); return; }

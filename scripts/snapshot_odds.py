@@ -72,6 +72,13 @@ def main():
             series.extend([None] * (len(hist["dates"]) - len(series)))
             series[k] = v
 
+    # Keep every AP poll and CFP ranking, keyed by release date, so past weeks can be compared with the model
+    polls = hist.setdefault("polls", {})
+    for kind, poll in (season.get("polls") or {}).items():
+        if poll.get("date"):
+            polls.setdefault(kind, {})[poll["date"][:10]] = {"name": poll.get("headline") or poll.get("name", ""),
+                                                             "ranks": poll["ranks"]}
+
     OUT.write_text(PREFIX + json.dumps(hist, separators=(",", ":")) + ";\n", encoding="utf-8")
     print(f"snapshot for {today}: {len(ours)} teams, {len(hist['dates'])} days of history")
 
