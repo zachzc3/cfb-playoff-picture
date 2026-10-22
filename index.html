@@ -739,9 +739,10 @@ function playBracket(seeds, mode, rng) {
 const BRACKET_ORDER = ['R1A', 'R1B', 'R1C', 'R1D', 'QF1', 'QF2', 'QF3', 'QF4', 'SF1', 'SF2', 'F'];
 const flip = p => Math.random() < p;
 // The Oracle's upset dial. Each setting scales every game's spread by k: k > 1 makes favorites safer, k < 1 makes
-// upsets likelier, and k = 0 turns every game into a coin flip. Only the Simulator uses it.
+// upsets likelier, k = 0 turns every game into a coin flip, and Chalk (k = Infinity) always takes the favorite.
+// Only the Simulator uses it.
 const CHAOS = [
-  { k: 4, name: 'Chalk', line: 'The favorite wins. Almost always. Nobody has any fun.', color: '#3d7fc4', glow: '#a9cdf2', mood: 0 },
+  { k: Infinity, name: 'Chalk', line: 'The favorite wins every single game. Nobody has any fun.', color: '#3d7fc4', glow: '#a9cdf2', mood: 0 },
   { k: 1.7, name: 'Favorite-friendly', line: 'A surprise here and there, but mostly order.', color: '#2f8f87', glow: '#9fdcd5', mood: 1 },
   { k: 1, name: 'By the book', line: 'Upsets happen exactly as often as the odds say.', color: '#3f8a4f', glow: '#a9dcb2', mood: 2 },
   { k: 0.6, name: 'Spicy', line: "More upsets than the odds expect. Somebody's season is about to end.", color: '#d17a26', glow: '#f6c99a', mood: 3 },
@@ -762,7 +763,8 @@ function probit(p) {
   const q = p - 0.5, r = q * q;
   return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
-const dial = (p, lvl = chaosLevel()) => lvl.k === 1 ? p : lvl.k === 0 ? 0.5 : Phi(lvl.k * probit(p));
+const dial = (p, lvl = chaosLevel()) => lvl.k === 1 ? p : lvl.k === 0 ? 0.5
+  : lvl.k === Infinity ? (p > 0.5 ? 1 : p < 0.5 ? 0 : 0.5) : Phi(lvl.k * probit(p));
 const openGames = () => GAMES.filter(g => !g.final && !S.picks[g.id]);
 function simGames(list) {
   const log = [];
@@ -1472,7 +1474,7 @@ function oracleSvg(lvl) {
 }
 function oracleCard() {
   const lvl = chaosLevel(), i = CHAOS.indexOf(lvl);
-  const eg = p => fmtPct(dial(p, lvl));
+  const eg = p => { const v = dial(p, lvl); return v >= 1 ? '100%' : fmtPct(v); };
   return `<section class="oracle" style="--orb:${lvl.color}">
     ${oracleSvg(lvl)}
     <div class="oracle-body">
