@@ -212,6 +212,7 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
 .chart .k.el { border-top: 1.5px dashed var(--muted); }
 .path { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--pylon); border-radius: 8px; padding: 4px 14px; max-width: 80ch; }
 .path p { margin: 10px 0; }
+.path.gap { border-left-color: var(--turf); margin-bottom: 12px; }
 /* conference grid */
 .mx-confs { flex-wrap: wrap; }
 .mx-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 16px; align-items: start; }
@@ -1288,6 +1289,24 @@ function oddsChart(id) {
 }
 // Plain-English summary of how a team gets in: its most common route, which records are safe or on the
 // bubble, and the remaining games it can least afford to lose.
+// The games a team still has that the user hasn't picked, and how it does if it wins all of them
+function openOwn(id) { return GAMES.filter(g => !g.final && (g.home === id || g.away === id) && !S.picks[g.id]); }
+function winOut(id) { const p = recordPaths(id)[0]; return p ? { l: p.l, share: p.share, inP: p.cfp / p.n } : null; }
+function winOutTile(id) {
+  const w = winOut(id); if (!openOwn(id).length || !w) return '';
+  return `<div class="tile"><b>${fmtPct(w.inP)}</b><span>make it if it wins the rest and finishes ${NG[id] - w.l}-${w.l}</span></div>`;
+}
+// Explains why the overall chance can sit far below the "if it wins the rest" chance
+function gapNote(id) {
+  const open = openOwn(id), w = winOut(id), t = T[id];
+  if (!open.length || !w || w.share > 0.9) return '';
+  const list = open.map(g => { const home = g.home === id, p = home ? pHome(g) : 1 - pHome(g);
+    return `${home ? 'vs.' : 'at'} ${esc(teamName(home ? g.away : g.home, g))} (${fmtPct(p)})`; }).join(', ');
+  const n = open.length;
+  return `<div class="path gap"><p><b>Why ${fmtPct(ODDS.cnt[id].cfp / ODDS.done)} and not ${fmtPct(w.inP)}?</b> ${esc(t.name)} still has ${n === 1 ? 'a game' : n + ' games'} you haven't picked: ${list}.
+    It wins ${n === 1 ? 'it' : 'all ' + n} in ${fmtPct(w.share)} of simulated seasons, and when it does it gets in ${fmtPct(w.inP)} of the time. The rest of the time it drops a game and usually misses.
+    To see the case where it wins out, tap <b>Win out</b> under Games left.</p></div>`;
+}
 function pathSummary(id, paths, isInd) {
   const O = ODDS, t = T[id], ng = NG[id], n = O.done, now = O.cnt[id].cfp / n;
   const rec = l => `${ng - l}-${l}`;
@@ -1351,7 +1370,7 @@ function renderTeam() {
       ${tile(recStr(r), 'projected record' + (isInd ? '' : `, ${r.cw}-${r.cl} in conference`))}
       ${isInd ? '' : tile(pos, 'projected finish ' + esc(where))}
       ${tile('#' + P.rk[id], seed >= 0 ? `projected rank, seed ${seed + 1}${P.auto.has(id) ? ' (auto bid)' : ''}` : 'projected rank, out of the field')}
-      ${ready ? tile(fmtPct(c.cfp / n), 'make the playoff') + tile(fmtPct(c.bye / n), 'first-round bye') + (isInd ? '' : tile(fmtPct(c.conf / n), 'win the conference')) + tile(fmtPct(c.title / n), 'win the national title') + tile((c.w / n).toFixed(1), 'average wins') : ''}
+      ${ready ? tile(fmtPct(c.cfp / n), 'make the playoff, counting every way its unpicked games can go') + winOutTile(id) + tile(fmtPct(c.bye / n), 'first-round bye') + (isInd ? '' : tile(fmtPct(c.conf / n), 'win the conference')) + tile(fmtPct(c.title / n), 'win the national title') + tile((c.w / n).toFixed(1), 'average wins') : ''}
     </div>`;
   if (!ready) return head + `<p class="hint">Simulating seasons… ${ODDS ? ODDS.done.toLocaleString() : 0} of ${ODDS ? ODDS.N.toLocaleString() : ''}</p>`;
   // What each regular-season record is worth
@@ -1360,13 +1379,17 @@ function renderTeam() {
   const pathRows = paths.map(p => `<tr><td class="n">${ng - p.l}-${p.l}</td><td style="width:22%"><div class="bar o" title="${(p.share * 100).toFixed(1)}%"><b style="width:${(p.share * 100).toFixed(1)}%"></b></div></td><td class="n">${fmtPct(p.share)}</td>
     <td class="n"><b>${fmtPct(p.cfp / p.n)}</b></td><td class="n">${fmtPct(p.bye / p.n)}</td>${isInd ? '' : `<td class="n">${cell(p.champIn, p.champ)}</td><td class="n">${cell(p.notIn, p.notChamp)}</td>`}</tr>`).join('');
   const pathTable = `<h2>Playoff odds over time</h2>${oddsChart(id)}
-    <h2>Path to the playoff</h2>${pathSummary(id, recordPaths(id), isInd)}
+    <h2>Path to the playoff</h2>${gapNote(id)}${pathSummary(id, recordPaths(id), isInd)}
     <h2>What each record is worth</h2>
     <p class="lede">The regular-season records ${esc(t.name)} finished with across ${O.done.toLocaleString()} simulated seasons, how often each happened, and how often it was enough.${isInd ? '' : ' The last two columns split those seasons by whether it also won its conference. A dash means too few seasons to say.'}</p>
     <div class="scroll"><table><thead><tr><th class="n">Record</th><th></th><th class="n">How often</th><th class="n">Playoff</th><th class="n">Bye</th>${isInd ? '' : '<th class="n">If champ</th><th class="n">If not</th>'}</tr></thead><tbody>${pathRows}</tbody></table></div>`;
   // Its remaining games, then other games to root for
   const left = GAMES.filter(g => (g.home === id || g.away === id) && !g.final);
-  const own = `<h2>Games left</h2>${left.length ? `<p class="lede">Under each team: ${esc(t.name)}'s playoff chance with a win and with a loss. Tap a team to pick it.</p><div class="games">${left.map(g => gameCard(g, true)).join('')}</div>` : '<p class="hint">Its regular season is over.</p>'}`;
+  const ownPicked = left.some(g => S.picks[g.id]);
+  const own = `<h2>Games left</h2>${left.length ? `<p class="lede">Under each team: ${esc(t.name)}'s playoff chance with a win and with a loss. Tap a team to pick it.</p>
+    <div class="sim-controls"><button class="btn primary" type="button" data-act="winout" data-v="${id}"${openOwn(id).length ? '' : ' disabled'}>Win out</button>
+      <button class="btn" type="button" data-act="team-clear" data-v="${id}"${ownPicked ? '' : ' disabled'}>Clear ${esc(t.name)}'s picks</button></div>
+    <div class="games">${left.map(g => gameCard(g, true)).join('')}</div>` : '<p class="hint">Its regular season is over.</p>'}`;
   const others = topImpact(id, 'cfp', 60).filter(x => x.g.home !== id && x.g.away !== id).slice(0, 10);
   const root = `<h2>Other games to root for</h2>
     ${others.length ? `<p class="lede">The games ${esc(t.name)} isn't playing in that move its playoff chances the most, and the result to cheer for. Pick one to lock it in.</p><ul class="root">${others.map(x => rootRow(x, id)).join('')}</ul>`
@@ -1492,6 +1515,8 @@ document.addEventListener('click', e => {
   if (a === 'mx') { const g = b.dataset.g, sd = b.dataset.s; delete S.sim[g]; S.picks[g] === sd ? delete S.picks[g] : S.picks[g] = sd; return changed(); }
   if (a === 'mx-conf') { S.mxConf = b.dataset.v; save(); render(); return; }
   if (a === 'mx-clear') { const c = S.mxConf; Object.values(confGames(c)).flat().forEach(g => { delete S.picks[g.id]; delete S.sim[g.id]; }); delete S.ccg[c]; delete S.simCcg[c]; return changed(); }
+  if (a === 'winout') { const id = b.dataset.v; for (const g of openOwn(id)) { S.picks[g.id] = g.home === id ? 'home' : 'away'; delete S.sim[g.id]; } return changed(); }
+  if (a === 'team-clear') { const id = b.dataset.v; for (const g of GAMES) if (!g.final && (g.home === id || g.away === id)) { delete S.picks[g.id]; delete S.sim[g.id]; } return changed(); }
   if (a === 'fit-w') { S.w = +b.dataset.v; return changed(); }
   if (a === 'imp-metric') { S.impMetric = b.dataset.v; save(); render(); return; }
   if (a === 'imp-n') { S.impN = +b.dataset.v; save(); render(); return; }
