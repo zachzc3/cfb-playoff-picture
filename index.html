@@ -347,14 +347,21 @@ const FBS = D.teams.map(t => t.id);
 const GAMES = D.games;
 const G = Object.fromEntries(GAMES.map(g => [g.id, g]));
 const SD = 14, H2H_GAP = 0.5; // ranking-score units; roughly ten spots near the top
-// Ranking-score cost of each regular-season loss. Fit to the AP poll at mid-October 2026: with it, the model's
-// ranking of results so far misses the poll by about 1.8 spots per team instead of 2.7.
-const LOSS_W = 0.2;
+// Committee model settings, in ranking-score units: the cost of each loss (lossW), an extra cost for every loss
+// after the first (loss2W), and the conference champion's bonus (champB). Together with the default 15% power
+// weight, these were fit on Oct 21, 2026 so the simulated playoff odds match ESPN's FPI playoff odds as closely as
+// possible (average gap 2.4 points per contender, from 3.5) using FPI game odds. A heavier second-loss cost made
+// the match worse, so it stays at 0. lossCost is what each team's losses cost it.
+const CM = { lossW: 0.1, loss2W: 0, champB: 0.1 };
+const DEFAULT_W = 15, MODEL_VERSION = 2;
+const lossCost = l => CM.lossW * l + CM.loss2W * Math.max(0, l - 1);
 const STORE = 'cfb-playoff-picture-2026';
 
 // ---------- state ----------
-let S = { picks: {}, ccg: {}, cfp: {}, w: 50, tab: 'picks', week: null, conf: '', q: '', src: 'blend', h2h: true };
+let S = { picks: {}, ccg: {}, cfp: {}, w: DEFAULT_W, tab: 'picks', week: null, conf: '', q: '', src: 'blend', h2h: true };
 try { Object.assign(S, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+// A saved power weight from before the retune goes to the new default
+if (S.model !== MODEL_VERSION) { S.w = DEFAULT_W; S.model = MODEL_VERSION; }
 function save() { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} }
 
 // ---------- math ----------
@@ -677,7 +684,7 @@ function seasonBody(mode, rng, w, trace) {
   const sv = FBS.map(i => sor[i]), sm = mean(sv), ssd = sdev(sv) || 1;
   const champSet = new Set(Object.values(champs)), wp = w / 100;
   const score = {};
-  FBS.forEach(i => score[i] = wp * (R[i] + obs[i] - POW_M) / POW_SD + (1 - wp) * (sor[i] - sm) / ssd - LOSS_W * rl[i] + (champSet.has(i) ? 0.15 : 0));
+  FBS.forEach(i => score[i] = wp * (R[i] + obs[i] - POW_M) / POW_SD + (1 - wp) * (sor[i] - sm) / ssd - lossCost(rl[i]) + (champSet.has(i) ? CM.champB : 0));
   const ranked = [...FBS].sort((a, b) => score[b] - score[a]);
   const h2h = S.h2h ? applyHeadToHead(ranked, rec, score, rl) : {};
   const rk = {}; ranked.forEach((id, i) => rk[id] = i + 1);
@@ -1198,7 +1205,7 @@ function fitToPoll() {
   const ranked = Object.entries(poll.ranks).filter(([id]) => T[id]);
   let best = null;
   for (let w = 0; w <= 100; w += 5) {
-    const sc = i => w / 100 * zPow[i] + (1 - w / 100) * (sor[i] - sm) / ssd - LOSS_W * ls[i];
+    const sc = i => w / 100 * zPow[i] + (1 - w / 100) * (sor[i] - sm) / ssd - lossCost(ls[i]);
     const order = [...FBS].sort((a, b) => sc(b) - sc(a));
     const rk = {}; order.forEach((id, i) => rk[id] = i + 1);
     const miss = mean(ranked.map(([id, r]) => Math.abs(Math.min(rk[id], 40) - r)));
