@@ -272,6 +272,10 @@ table.mx { width: auto; border-collapse: separate; border-spacing: 3px; }
 .mx-btn.pl { border: 1.5px solid var(--loss); color: var(--loss); }
 .mx-btn.sim { border-style: dashed; }
 .mx-side h3 { margin: 4px 0 8px; }
+.mx-weeks { min-width: 0; }
+.mx-weeks .games { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.mx-weeks .wk-h { font-family: var(--data); font-size: 15px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 14px 0 6px; }
+.mx-weeks .wk-h:first-of-type { margin-top: 4px; }
 .mx-side td.n { white-space: nowrap; }
 .mx-side .hide-sm { display: none; }
 .mx-side .tg { display: grid; gap: 6px; margin-bottom: 6px; }
@@ -1225,13 +1229,29 @@ function renderMatrix() {
     ? groups.map(gr => `<h4>${esc(gr.div)}</h4>` + standTable(gr.ids, 1) + tieNotes(gr.ties)).join('')
     : standTable(groups[0].ids, 2) + tieNotes(groups[0].ties);
   const short = CONF_SHORT[c.abbr] || c.name.replace(' Conference', '');
-  return `<h2>${esc(short)} grid</h2>
-    <p class="lede">Read across a row for that team's result against each team at the top. Tap an open game to make the row team win, and tap it again to go back to the projection. The standings, title game and playoff picture next to the grid update as you go.</p>
+  const byWeek = S.mxView === 'weeks';
+  const viewSeg = `<div class="seg" role="group" aria-label="View"><button type="button" data-act="mx-view" data-v="grid" aria-pressed="${!byWeek}">Grid</button><button type="button" data-act="mx-view" data-v="weeks" aria-pressed="${byWeek}">By week</button></div>`;
+  let main;
+  if (byWeek) {
+    // Every conference game, week by week, with the usual pick buttons
+    const games = Object.values(pair).flat().filter(g => !S.mxOpen || !g.final).sort((x, y) => x.date.localeCompare(y.date));
+    const weeks = [...new Set(games.map(g => g.week))];
+    const left = Object.values(pair).flat().filter(g => !g.final).length;
+    main = `<div class="mx-weeks">
+        <div class="sim-controls"><button class="btn" type="button" data-act="mx-open">${S.mxOpen ? 'Show finished games too' : 'Show only games left'}</button><span class="hint">${left} conference game${left === 1 ? '' : 's'} left</span></div>
+        ${weeks.map(w => `<h3 class="wk-h">Week ${w}</h3><div class="games">${games.filter(g => g.week === w).map(g => gameCard(g, false)).join('')}</div>`).join('') || '<p class="hint">No conference games left.</p>'}
+      </div>`;
+  } else {
+    main = `<div class="scroll mx-scroll"><table class="mx"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+  }
+  return `<h2>${esc(short)} ${byWeek ? 'games by week' : 'grid'}</h2>
+    <p class="lede">${byWeek ? 'Every conference game, week by week. Tap a team to pick it, and tap again to go back to the projection.' : "Read across a row for that team's result against each team at the top. Tap an open game to make the row team win, and tap it again to go back to the projection."} The standings, title game and playoff picture alongside update as you go.</p>
     <div class="filters"><div class="seg mx-confs" role="group" aria-label="Conference">${confBtns}</div>
-      <button class="btn" type="button" data-act="mx-clear"${nPicked ? '' : ' disabled'}>Clear ${esc(short)} picks</button></div>
-    <div class="legend"><span><i class="lg fw"></i>Projected win</span><span><i class="lg pw"></i>Your pick: win</span><span><i class="lg pl"></i>Your pick: loss</span><span><i class="lg fin-w"></i>Final</span><span>@ away · vs neutral · % is the row team's win chance</span></div>
+      ${viewSeg}<button class="btn" type="button" data-act="mx-clear"${nPicked ? '' : ' disabled'}>Clear ${esc(short)} picks</button></div>
+    ${byWeek ? '<div class="legend"><span><i></i>Projected winner (favorite)</span><span><i class="pk"></i>Your pick</span><span><i class="pk sm"></i>Simulated result</span></div>'
+      : '<div class="legend"><span><i class="lg fw"></i>Projected win</span><span><i class="lg pw"></i>Your pick: win</span><span><i class="lg pl"></i>Your pick: loss</span><span><i class="lg fin-w"></i>Final</span><span>@ away · vs neutral · % is the row team’s win chance</span></div>'}
     <div class="mx-wrap">
-      <div class="scroll mx-scroll"><table class="mx"><thead>${head}</thead><tbody>${body}</tbody></table></div>
+      ${main}
       <aside class="card mx-side">
         <h3>Title game</h3>
         <div class="tg">${tgBtn(m.a, pa)}${tgBtn(m.b, 1 - pa)}</div>
@@ -1770,6 +1790,8 @@ document.addEventListener('click', e => {
   if (a === 'team') { openSheet(b.dataset.v); return; }
   if (a === 'close-sheet') { document.getElementById('sheet').close(); return; }
   if (a === 'mx') { const g = b.dataset.g, sd = b.dataset.s; delete S.sim[g]; S.picks[g] === sd ? delete S.picks[g] : S.picks[g] = sd; return changed(); }
+  if (a === 'mx-view') { S.mxView = b.dataset.v; save(); render(); return; }
+  if (a === 'mx-open') { S.mxOpen = !S.mxOpen; save(); render(); return; }
   if (a === 'mx-conf') { S.mxConf = b.dataset.v; save(); render(); return; }
   if (a === 'mx-clear') { const c = S.mxConf; Object.values(confGames(c)).flat().forEach(g => { delete S.picks[g.id]; delete S.sim[g.id]; }); delete S.ccg[c]; delete S.simCcg[c]; return changed(); }
   if (a === 'winout') { const id = b.dataset.v; for (const g of openOwn(id)) { S.picks[g.id] = g.home === id ? 'home' : 'away'; delete S.sim[g.id]; } return changed(); }
