@@ -1058,7 +1058,7 @@ function openSheet(id) {
   if (next) dlg.scrollTop = next.closest('.game').offsetTop - dlg.querySelector('.sheet-head').offsetHeight - 70;
 }
 
-// The real poll for a week: the latest CFP ranking (once released), else the latest AP poll, dated on or before
+// The real poll for a week: the newer of the latest CFP ranking and the latest AP poll, dated on or before
 // that week's first game. Weeks older than every saved poll use the earliest one, flagged as `early`.
 const POLL_WEEK = {};
 const weekStart = week => GAMES.filter(g => g.week === week).map(g => etDate(g.date)).sort()[0];
@@ -1072,8 +1072,10 @@ function realPollForWeek(week) {
     const d = before.length ? before[before.length - 1] : dates[0];
     return { kind, date: d, early: !before.length, label: kind === 'cfp' ? 'CFP' : 'AP', ...arch[d] };
   };
-  const cfp = pick('cfp');
-  return POLL_WEEK[week] = (cfp && !cfp.early ? cfp : null) || pick('ap');
+  // Whichever is newer: the AP poll from Sunday until the committee's Tuesday release, then the CFP ranking
+  const cfp = pick('cfp'), ap = pick('ap');
+  const useCfp = cfp && !cfp.early && (!ap || cfp.date >= ap.date);
+  return POLL_WEEK[week] = useCfp ? cfp : ap || (cfp && !cfp.early ? cfp : null);
 }
 // Weeks after the latest real poll get a projected Top 25: the real poll's order, moved by how much each team's
 // results since that poll (real results, your picks, then favorites) change its committee-model score.
