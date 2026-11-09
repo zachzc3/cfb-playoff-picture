@@ -1095,11 +1095,37 @@ function anchoredFrom(baseRanks, baseDate, throughWeek) {
   const A = runSeason('pick', null, S.w, null, covered), B = runSeason('pick', null, S.w, null, Math.max(throughWeek, covered));
   const sortedA = FBS.map(i => A.score[i]).sort((a, b) => b - a);
   const n = Object.keys(baseRanks).length, floor = sortedA[n - 1] - 1e-3;
+  // Each team's change comes only from its games since the ranking, scored like the model's résumé but with
+  // opponent strength half power rating and half the opponent's rank in that ranking, since voters and the
+  // committee reward wins over ranked teams. Changes use A's fixed scale, so one team's games can't rescale
+  // everyone else's.
+  const wp = S.w / 100, ssdA = sdev(FBS.map(i => A.sor[i])) || 1;
+  const sortedR = FBS.map(i => R[i]).sort((a, b) => b - a);
+  const oppQ = (id, g) => {
+    if (!T[id]) return rOf(id, g);
+    const r = baseRanks[id], implied = r ? sortedR[r - 1] : Math.min(R[id], sortedR[n]);
+    return (R[id] + implied) / 2;
+  };
+  const dSor = {}, dObs = {}, dL = {};
+  FBS.forEach(i => { dSor[i] = 0; dObs[i] = 0; dL[i] = 0; });
+  for (const g of GAMES) {
+    if (g.week <= covered || g.week > throughWeek) continue;
+    const hw = g.final ? g.hs > g.as : S.picks[g.id] ? S.picks[g.id] === 'home' : pHome(g) >= 0.5;
+    const surprise = (hw ? 1 : 0) - pHomePub(g);
+    for (const side of ['home', 'away']) {
+      const id = g[side]; if (!T[id]) continue;
+      const won = side === 'home' ? hw : !hw, opp = side === 'home' ? g.away : g.home;
+      dSor[id] += (won ? 1 : 0) - Phi((BASE - oppQ(opp, g) + loc(g, id)) / SD);
+      if (!won) dL[id]++;
+      if (!g.final) dObs[id] += OBS_K * (side === 'home' ? surprise : -surprise);
+    }
+  }
   const proj = {};
   FBS.forEach(i => {
     const r = baseRanks[i];
     const anchor = r ? sortedA[r - 1] : Math.min(A.score[i], floor);
-    proj[i] = anchor + (B.score[i] - A.score[i]);
+    const delta = wp * dObs[i] / POW_SD + (1 - wp) * dSor[i] / ssdA - (lossCost(A.rl[i] + dL[i]) - lossCost(A.rl[i]));
+    proj[i] = anchor + delta;
   });
   const order = [...FBS].sort((a, b) => proj[b] - proj[a]);
   const rk = {}; order.forEach((id, k) => rk[id] = k + 1);
