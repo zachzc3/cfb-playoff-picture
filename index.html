@@ -361,9 +361,9 @@ const SD = 14, H2H_GAP = 0.5; // ranking-score units; roughly ten spots near the
 // weight, these were fit on Oct 21, 2026 so the simulated playoff odds match ESPN's FPI playoff odds as closely as
 // possible (average gap 2.4 points per contender, from 3.5) using FPI game odds. A heavier second-loss cost made
 // the match worse, so it stays at 0. lossCost is what each team's losses cost it.
-const CM = { lossW: 0.1, loss2W: 0, champB: 0.1 };
+const CM = { lossW: 0.1, loss2W: 0, loss3W: 0, champB: 0.1 };
 const DEFAULT_W = 15, MODEL_VERSION = 2;
-const lossCost = l => CM.lossW * l + CM.loss2W * Math.max(0, l - 1);
+const lossCost = l => CM.lossW * l + CM.loss2W * Math.max(0, l - 1) + CM.loss3W * Math.max(0, l - 2);
 const STORE = 'cfb-playoff-picture-2026';
 
 // ---------- state ----------
@@ -644,12 +644,44 @@ function gauss(rng) { let u = 0; while (!u) u = rng(); return Math.sqrt(-2 * Mat
 // upto: rank on games through that week only (no title games), like a mid-season committee ranking.
 // 'now' means completed games only.
 function runSeason(mode, rng, w, trace, upto) {
+  const AN = upto == null ? getAnchor(w) : null; // computed before SIMR is set, since it runs a season of its own
   if (mode === 'sim') { SIMR = {}; FBS.forEach(i => SIMR[i] = R[i] + SIM_SD * gauss(rng)); }
-  try { return seasonBody(mode, rng, w, trace, upto); } finally { SIMR = null; }
+  try { return seasonBody(mode, rng, w, trace, upto, AN); } finally { SIMR = null; }
 }
-function seasonBody(mode, rng, w, trace, upto) {
+// The season-end ranking starts from the latest real ranking (the newer of the CFP ranking and the AP poll), the
+// way the committee only re-sorts teams on new results: each team starts at the model score of the spot it holds
+// there, then moves on its games since, with opponent strength half power rating and half rank in that ranking,
+// a champion's bonus, and no charge for losing a title game. Before the first poll, the model ranks from scratch.
+function latestRealPoll() {
+  const newest = (kind, label) => { const arch = pollArchive(kind), d = Object.keys(arch).sort().pop(); return d ? { label, date: d, ...arch[d] } : null; };
+  const cfp = newest('cfp', 'CFP'), ap = newest('ap', 'AP');
+  return cfp && (!ap || cfp.date >= ap.date) ? cfp : ap;
+}
+let ANCHOR_CACHE = null;
+function getAnchor(w) {
+  const real = latestRealPoll();
+  if (!real) return null;
+  const key = [w, S.src, real.label, real.date].join('|');
+  if (ANCHOR_CACHE && ANCHOR_CACHE.key === key) return ANCHOR_CACHE;
+  const covered = coveredWeek(real.date);
+  const A = runSeason('pick', null, w, null, covered);
+  const sortedA = FBS.map(i => A.score[i]).sort((a, b) => b - a);
+  const n = Object.keys(real.ranks).length, floor = sortedA[n - 1] - 1e-3;
+  const anchor = {};
+  FBS.forEach(i => { const r = real.ranks[i]; anchor[i] = r ? sortedA[r - 1] : Math.min(A.score[i], floor); });
+  const sortedR = FBS.map(i => R[i]).sort((a, b) => b - a);
+  const oppQ = (id, g) => {
+    if (!T[id]) return rOf(id, g);
+    const r = real.ranks[id], implied = r ? sortedR[r - 1] : Math.min(R[id], sortedR[n]);
+    return (R[id] + implied) / 2;
+  };
+  return ANCHOR_CACHE = { key, real, covered, anchor, oppQ, ssdA: sdev(FBS.map(i => A.sor[i])) || 1, rlA: A.rl };
+}
+function seasonBody(mode, rng, w, trace, upto, AN) {
   const rec = {}; FBS.forEach(i => rec[i] = { w: 0, l: 0, cw: 0, cl: 0, res: [] });
   const obs = {}; FBS.forEach(i => obs[i] = 0);
+  const dSor = {}, dL = {}; FBS.forEach(i => { dSor[i] = 0; dL[i] = 0; });
+  const credit = (id, opp, won, g, locv) => { dSor[id] += (won ? 1 : 0) - Phi((BASE - AN.oppQ(opp, g) + locv) / SD); if (!won) dL[id]++; };
   for (const g of GAMES) {
     if (upto != null && (upto === 'now' ? !g.final : g.week > upto)) continue;
     let hw;
@@ -664,6 +696,10 @@ function seasonBody(mode, rng, w, trace, upto) {
     if (trace && ODDS.openIdx[g.id] !== undefined) trace[ODDS.openIdx[g.id]] = hw ? 1 : 0;
     const isConf = g.conf && T[g.home] && T[g.away] && T[g.home].conf === T[g.away].conf && T[g.home].conf !== IND;
     addResult(rec, g, hw, isConf);
+    if (AN && g.week > AN.covered) {
+      if (T[g.home]) credit(g.home, g.away, hw, g, loc(g, g.home));
+      if (T[g.away]) credit(g.away, g.home, !hw, g, loc(g, g.away));
+    }
   }
   if (upto != null) return rankingAsOf(rec, obs, w);
   // standings and title games
@@ -681,9 +717,19 @@ function seasonBody(mode, rng, w, trace, upto) {
     champs[c.id] = win;
     addResult(rec, { home: hi, away: lo, neutral: true }, win === hi, false);
     rec[hi].res[rec[hi].res.length - 1].ccg = rec[lo].res[rec[lo].res.length - 1].ccg = true;
+    if (AN) credit(win, win === hi ? lo : hi, true, { neutral: true }, 0); // title-game losers aren't charged
   }
   const champSet = new Set(Object.values(champs));
-  const { sor, rl, score, ranked, rk, h2h } = rankTeams(rec, obs, w, champSet);
+  let { sor, rl, score, ranked, rk, h2h } = rankTeams(rec, obs, w, champSet, !!AN);
+  if (AN) {
+    const wp = w / 100;
+    score = {};
+    FBS.forEach(i => score[i] = AN.anchor[i] + wp * obs[i] / POW_SD + (1 - wp) * dSor[i] / AN.ssdA
+      - (lossCost(AN.rlA[i] + dL[i]) - lossCost(AN.rlA[i])) + (champSet.has(i) ? CM.champB : 0));
+    ranked = [...FBS].sort((a, b) => score[b] - score[a]);
+    h2h = S.h2h ? applyHeadToHead(ranked, rec, score, rl) : {};
+    rk = {}; ranked.forEach((id, k) => rk[id] = k + 1);
+  }
   // 12-team field: five highest-ranked conference champions + seven at-large, seeded straight by ranking
   const { auto, seeds } = pickField(ranked, rk, champSet);
   const bracket = playBracket(seeds, mode, rng);
@@ -707,7 +753,7 @@ function pickField(ranked, rk, champSet) {
 }
 // committee-style ranking: blend of power rating and strength of record, less a cost per loss. A conference
 // title game can only help: the winner banks the win and the champion's bump, and the loser isn't charged.
-function rankTeams(rec, obs, w, champSet) {
+function rankTeams(rec, obs, w, champSet, skipH2H) {
   const sor = {}, rl = {};
   FBS.forEach(i => {
     let s = 0, l = 0;
@@ -723,7 +769,7 @@ function rankTeams(rec, obs, w, champSet) {
   const score = {};
   FBS.forEach(i => score[i] = wp * (R[i] + obs[i] - POW_M) / POW_SD + (1 - wp) * (sor[i] - sm) / ssd - lossCost(rl[i]) + (champSet.has(i) ? CM.champB : 0));
   const ranked = [...FBS].sort((a, b) => score[b] - score[a]);
-  const h2h = S.h2h ? applyHeadToHead(ranked, rec, score, rl) : {};
+  const h2h = S.h2h && !skipH2H ? applyHeadToHead(ranked, rec, score, rl) : {};
   const rk = {}; ranked.forEach((id, i) => rk[id] = i + 1);
   return { sor, rl, score, ranked, rk, h2h };
 }
@@ -1526,7 +1572,7 @@ function renderRank() {
       missing by ${fit.miss.toFixed(1)} spots per team on average.${pollKey === 'ap' ? ' The CFP committee rankings replace the AP poll here once they come out in early November.' : ''}</div>
       <button class="btn" type="button" data-act="fit-w" data-v="${fit.w}"${fit.w === S.w ? ' disabled' : ''}>${fit.w === S.w ? 'Matched' : 'Match the ' + (pollKey === 'cfp' ? 'committee' : 'AP poll')}</button></div>` : '';
   return `<h2>Projected final committee rankings</h2>${picker}
-    <p class="lede">A stand-in for the selection committee. Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. Each regular-season loss also costs a set amount on top of what it does to the résumé, since the committee sorts heavily by losses. A conference title game can only help: the winner gets credit, and the loser isn't charged for the loss, the way the committee has treated title-game losers. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.${poll ? ` The gray ${esc(pollLabel)} column is the real ranking today, from the ${esc((poll.headline || poll.name).split(' - ').pop())}.` : ''}</p>
+    <p class="lede">A stand-in for the selection committee. ${(() => { const A = getAnchor(S.w); return A ? `It starts from the latest real ranking (${esc(A.real.label)}, ${esc(shortDate(A.real.date))}): each team begins where that ranking has it and moves only on games since, so a team ranked No. 21 can’t win its way into the field against unranked opponents. ` : ""; })()}Résumé is wins above what a typical playoff team would expect against the same schedule. Power is the ${esc(SOURCES[S.src].label)} rating, in points better than an average FBS team on a neutral field. Each regular-season loss also costs a set amount on top of what it does to the résumé, since the committee sorts heavily by losses. A conference title game can only help: the winner gets credit, and the loser isn't charged for the loss, the way the committee has treated title-game losers. With head-to-head on, a team that beat a higher-ranked team moves right in front of it when it has no more losses and the two are close.${poll ? ` The gray ${esc(pollLabel)} column is the real ranking today, from the ${esc((poll.headline || poll.name).split(' - ').pop())}.` : ''}</p>
     <div class="weigh"><label for="f-w">Committee leans on</label><span class="hint">Résumé</span>
       <input id="f-w" type="range" min="0" max="100" step="5" value="${S.w}"><span class="hint">Power</span><span class="num" id="wv">${S.w}% power</span>
       <label class="hint"><input id="f-h2h" type="checkbox"${S.h2h ? ' checked' : ''}> Honor head-to-head</label></div>
