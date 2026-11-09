@@ -1128,8 +1128,10 @@ function anchoredFrom(baseRanks, baseDate, throughWeek) {
     proj[i] = anchor + delta;
   });
   const order = [...FBS].sort((a, b) => proj[b] - proj[a]);
+  // Same head-to-head rule as the model's own ranking, on the season through this week
+  const h2h = S.h2h ? applyHeadToHead(order, B.rec, proj, B.rl) : {};
   const rk = {}; order.forEach((id, k) => rk[id] = k + 1);
-  return { order, rk, B, covered };
+  return { order, rk, B, covered, h2h };
 }
 function pollForWeek(week) {
   const open = GAMES.some(g => g.week < week && !g.final);
@@ -1438,14 +1440,14 @@ function renderRankReal(rel, real) {
 }
 // A week the committee hasn't ranked yet: start from its latest ranking and move teams by results since
 function renderRankAnchored(rel, base) {
-  const { order, rk, B, covered } = anchoredFrom(base.ranks, base.date, rel.upto);
+  const { order, rk, B, covered, h2h } = anchoredFrom(base.ranks, base.date, rel.upto);
   const br = bracketFrom(order, rk);
   const rows = order.slice(0, 30).map((id, i) => {
     const r = B.rec[id], was = base.ranks[id], move = was ? was - (i + 1) : null;
     return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td>${teamCell(id)}</td>
       <td class="n">${recStr(r)}</td><td class="hide-sm">${esc(CONF[T[id].conf].abbr.toUpperCase())}</td>
       <td class="n">${sgn(B.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td>
-      <td class="n espn">${was || 'NR'}${move ? ` <small class="${move > 0 ? 'up' : 'off'}">${move > 0 ? '▲' : '▼'}${Math.abs(move)}</small>` : ''}</td><td>${seedTags(id, br).join(' ')}</td></tr>`;
+      <td class="n espn">${was || 'NR'}${move ? ` <small class="${move > 0 ? 'up' : 'off'}">${move > 0 ? '▲' : '▼'}${Math.abs(move)}</small>` : ''}</td><td>${(h2h[id] ? [`<span class="pill" title="Moved ahead of ${esc(T[h2h[id]].name)} on head-to-head">Beat ${esc(T[h2h[id]].abbr)}</span>`] : []).concat(seedTags(id, br)).join(' ')}</td></tr>`;
   }).join('');
   const thru = rel.upto > covered ? `results since then through week ${rel.upto}: real scores so far, then your picks or the favorite` : 'no new games yet';
   return {
