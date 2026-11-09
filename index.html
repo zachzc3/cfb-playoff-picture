@@ -200,6 +200,7 @@ dialog.sheet::backdrop { background: rgba(10, 20, 14, .55); }
 .seg.asof { flex-wrap: wrap; }
 td.espn small { font-size: 11px; color: var(--muted); margin-left: 3px; }
 td.espn small.off { color: var(--pylon); font-weight: 700; }
+td.espn small.up { color: var(--win); font-weight: 700; }
 /* the Oracle */
 .oracle { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 18px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 4px 0 16px; max-width: 760px; }
 @media (max-width: 520px) { .oracle { grid-template-columns: 1fr; justify-items: center; text-align: center; } .oracle .stops { justify-content: center; } }
@@ -1080,25 +1081,38 @@ function realPollForWeek(week) {
 // Weeks after the latest real poll get a projected Top 25: the real poll's order, moved by how much each team's
 // results since that poll (real results, your picks, then favorites) change its committee-model score.
 let PROJ_POLL = {};
+// A real ranking covers every week whose last game was played before it was released. (Weeks can start on the
+// release day itself, with Tuesday games, so a week's start date isn't enough.)
+function coveredWeek(date) {
+  const weeks = [...new Set(GAMES.map(g => g.week))].sort((a, b) => a - b);
+  const end = w => GAMES.filter(g => g.week === w).map(g => etDate(g.date)).sort().pop();
+  return weeks.filter(w => end(w) < date).pop() || 0;
+}
+// Start every team where a real ranking had it, then move it by how much its results since (real results, your
+// picks, then favorites) change its committee-model score. Returns every FBS team in projected order.
+function anchoredFrom(baseRanks, baseDate, throughWeek) {
+  const covered = coveredWeek(baseDate);
+  const A = runSeason('pick', null, S.w, null, covered), B = runSeason('pick', null, S.w, null, Math.max(throughWeek, covered));
+  const sortedA = FBS.map(i => A.score[i]).sort((a, b) => b - a);
+  const n = Object.keys(baseRanks).length, floor = sortedA[n - 1] - 1e-3;
+  const proj = {};
+  FBS.forEach(i => {
+    const r = baseRanks[i];
+    const anchor = r ? sortedA[r - 1] : Math.min(A.score[i], floor);
+    proj[i] = anchor + (B.score[i] - A.score[i]);
+  });
+  const order = [...FBS].sort((a, b) => proj[b] - proj[a]);
+  const rk = {}; order.forEach((id, k) => rk[id] = k + 1);
+  return { order, rk, B, covered };
+}
 function pollForWeek(week) {
   const open = GAMES.some(g => g.week < week && !g.final);
   const real = realPollForWeek(week);
   if (!open || !real) return real;
   if (PROJ_POLL[week]) return PROJ_POLL[week];
-  // The real poll covers results through the week before the first week that starts after it
-  const later = [...new Set(GAMES.map(g => g.week))].sort((a, b) => a - b).filter(w => weekStart(w) > real.date);
-  const covered = (later[0] || week) - 1;
-  const A = runSeason('pick', null, S.w, null, covered), B = runSeason('pick', null, S.w, null, week - 1);
-  const sortedA = FBS.map(i => A.score[i]).sort((a, b) => b - a);
-  const n = Object.keys(real.ranks).length, floor = sortedA[n - 1] - 1e-3;
-  const proj = {};
-  FBS.forEach(i => {
-    const r = real.ranks[i];
-    const anchor = r ? sortedA[r - 1] : Math.min(A.score[i], floor);
-    proj[i] = anchor + (B.score[i] - A.score[i]);
-  });
+  const { order } = anchoredFrom(real.ranks, real.date, week - 1);
   const ranks = {};
-  [...FBS].sort((a, b) => proj[b] - proj[a]).slice(0, 25).forEach((id, k) => ranks[id] = k + 1);
+  order.slice(0, 25).forEach((id, k) => ranks[id] = k + 1);
   return PROJ_POLL[week] = { projected: true, base: real, label: 'Projected', through: week - 1, ranks };
 }
 const pollRank = (id, week) => { const pw = pollForWeek(week); return pw && T[id] ? pw.ranks[id] || null : null; };
@@ -1346,7 +1360,82 @@ function realRankingFor(rel) {
   const d = Object.keys(cfp).find(k => dayDiff(k, rel.key) <= 2);
   return d ? { label: 'CFP', date: d, ...cfp[d] } : null;
 }
+// The most recent CFP ranking released before a given release date
+function latestCfpBefore(key) {
+  const cfp = pollArchive('cfp');
+  const d = Object.keys(cfp).filter(k => k < key && dayDiff(k, key) > 2).sort().pop();
+  return d ? { label: 'CFP', date: d, ...cfp[d] } : null;
+}
+// The weekly bracket "if the season ended today": each conference's highest-ranked team stands in as champion
+function bracketFrom(order, rk) {
+  const champs = {};
+  for (const id of order) { const c = T[id].conf; if (c !== IND && !champs[c]) champs[c] = id; }
+  const champSet = new Set(Object.values(champs));
+  return { champSet, ...pickField(order, rk, champSet) };
+}
+const seedTags = (id, br) => {
+  const seed = br.seeds.indexOf(id), tags = [];
+  if (br.champSet.has(id) && seed >= 0) tags.push('<span class="pill">Conf. leader</span>');
+  if (seed >= 0) tags.push(`<span class="pill g">${seed < 4 ? 'Bye · ' : ''}Seed ${seed + 1}</span>`);
+  return tags;
+};
+const shortName = x => (x.name || '').split(' - ').pop() || x.label;
+// A week the committee has already ranked: its real order, with the model's rank beside it
+function renderRankReal(rel, real) {
+  const Q = runSeason('pick', null, S.w, null, rel.upto);
+  const order = Object.entries(real.ranks).filter(([id]) => T[id]).sort((a, b) => a[1] - b[1]).map(([id]) => id);
+  const rk = {}; order.forEach((id, k) => rk[id] = k + 1);
+  const br = bracketFrom(order, rk);
+  const rows = order.map((id, i) => {
+    const r = Q.rec[id], m = Q.rk[id], diff = m - real.ranks[id];
+    return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${real.ranks[id]}</td><td>${teamCell(id)}</td>
+      <td class="n">${recStr(r)}</td><td class="hide-sm">${esc(CONF[T[id].conf].abbr.toUpperCase())}</td>
+      <td class="n">${sgn(Q.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td>
+      <td class="n espn">${m}${diff ? ` <small class="${Math.abs(diff) >= 4 ? 'off' : ''}">${diff > 0 ? '+' : ''}${diff}</small>` : ''}</td><td>${seedTags(id, br).join(' ')}</td></tr>`;
+  }).join('');
+  const ranked = Object.entries(real.ranks).filter(([id]) => T[id]);
+  const miss = mean(ranked.map(([id, r]) => Math.abs(Math.min(Q.rk[id], 40) - r)));
+  const real12 = new Set(ranked.filter(([, r]) => r <= 12).map(([id]) => id));
+  const both = Q.ranked.slice(0, 12).filter(id => real12.has(id)).length;
+  const worst = ranked.map(([id, r]) => ({ id, r, d: Math.min(Q.rk[id], 40) - r })).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
+  const score = `<div class="tiles">
+      <div class="tile"><b>${miss.toFixed(1)}</b><span>spots off per team, on average: how far the model was from this ranking</span></div>
+      <div class="tile"><b>${both} of 12</b><span>teams in the committee's top 12 were also in the model's top 12</span></div>
+      <div class="tile"><b>${worst.map(x => esc(T[x.id].abbr)).join(', ')}</b><span>biggest misses: ${worst.map(x => `${esc(T[x.id].abbr)} model #${Math.min(Q.rk[x.id], 40)}${Q.rk[x.id] > 40 ? '+' : ''}, real #${x.r}`).join('; ')}</span></div>
+    </div>`;
+  return {
+    title: `CFP rankings, ${rel.label}`,
+    lede: `The committee's real ranking (${esc(shortName(real))}, released ${esc(shortDate(real.date))}). The bracket tags show the field if the season had ended then, with each conference's highest-ranked team as its champion. The gray Model column is where the committee model put each team on the same games, with how many spots it was off.`,
+    score,
+    table: `<div class="scroll"><table><thead><tr><th class="n">#</th><th>Team</th><th class="n">Rec</th><th class="hide-sm">Conf</th><th class="n">Résumé</th><th class="n hide-sm">Power</th><th class="n espn">Model</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`,
+  };
+}
+// A week the committee hasn't ranked yet: start from its latest ranking and move teams by results since
+function renderRankAnchored(rel, base) {
+  const { order, rk, B, covered } = anchoredFrom(base.ranks, base.date, rel.upto);
+  const br = bracketFrom(order, rk);
+  const rows = order.slice(0, 30).map((id, i) => {
+    const r = B.rec[id], was = base.ranks[id], move = was ? was - (i + 1) : null;
+    return `<tr class="${i === 12 ? 'cut' : ''}"><td class="n">${i + 1}</td><td>${teamCell(id)}</td>
+      <td class="n">${recStr(r)}</td><td class="hide-sm">${esc(CONF[T[id].conf].abbr.toUpperCase())}</td>
+      <td class="n">${sgn(B.sor[id])}</td><td class="n hide-sm">${sgn(R[id])}</td>
+      <td class="n espn">${was || 'NR'}${move ? ` <small class="${move > 0 ? 'up' : 'off'}">${move > 0 ? '▲' : '▼'}${Math.abs(move)}</small>` : ''}</td><td>${seedTags(id, br).join(' ')}</td></tr>`;
+  }).join('');
+  const thru = rel.upto > covered ? `results since then through week ${rel.upto}: real scores so far, then your picks or the favorite` : 'no new games yet';
+  return {
+    title: `Projected CFP rankings, ${rel.label}`,
+    lede: `Projected from the committee's latest ranking (${esc(shortName(base))}, released ${esc(shortDate(base.date))}). Every team starts where the committee had it and moves by ${thru}. The gray column is its rank in that release and how far it moved. The bracket tags show the field if the season ended then. Once the committee releases this ranking, this view switches to the real one.`,
+    score: '',
+    table: `<div class="scroll"><table><thead><tr><th class="n">#</th><th>Team</th><th class="n">Rec</th><th class="hide-sm">Conf</th><th class="n">Résumé</th><th class="n hide-sm">Power</th><th class="n espn">Last CFP</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`,
+  };
+}
 function renderRankAsOf(rel) {
+  if (rel.key !== 'now') {
+    const real = realRankingFor(rel);
+    if (real) return renderRankReal(rel, real);
+    const base = latestCfpBefore(rel.key);
+    if (base) return renderRankAnchored(rel, base);
+  }
   const Q = runSeason('pick', null, S.w, null, rel.upto);
   const real = realRankingFor(rel);
   const rows = Q.ranked.slice(0, 30).map((id, i) => {
@@ -1391,7 +1480,7 @@ function renderRank() {
       <label class="hint"><input id="f-h2h" type="checkbox"${S.h2h ? ' checked' : ''}> Honor head-to-head</label></div>`;
   if (rel.key !== 'final') {
     const v = renderRankAsOf(rel);
-    return `<h2>${rel.key === 'now' ? 'Committee rankings on results so far' : `Projected CFP rankings, ${esc(rel.label)}`}</h2>${picker}<p class="lede">${v.lede}</p>${slider}${v.score}${v.table}`;
+    return `<h2>${v.title ? esc(v.title) : rel.key === 'now' ? 'Committee rankings on results so far' : `Projected CFP rankings, ${esc(rel.label)}`}</h2>${picker}<p class="lede">${v.lede}</p>${slider}${v.score}${v.table}`;
   }
   const rows = P.ranked.slice(0, 30).map((id, i) => {
     const r = P.rec[id], tags = [];
