@@ -105,6 +105,20 @@ def fetch_polls():
     return polls
 
 
+def polls_with_fallback():
+    """ESPN's feed sometimes lists only some polls (on Sundays the AP poll can lag the Coaches Poll). Keep the
+    last known AP and CFP rankings for any kind missing from the feed instead of dropping them."""
+    polls = fetch_polls()
+    if OUT.exists():
+        try:
+            old = json.loads(OUT.read_text(encoding="utf-8")[len("window.CFB_DATA = "):].strip().rstrip(";"))
+            for kind, poll in (old.get("polls") or {}).items():
+                polls.setdefault(kind, poll)
+        except ValueError:
+            pass
+    return polls
+
+
 def fetch_week(week):
     url = (f"{BASE}/site/v2/sports/football/college-football/scoreboard"
            f"?groups=80&seasontype=2&week={week}&dates={SEASON}&limit=400")
@@ -180,7 +194,7 @@ def main():
         "season": SEASON,
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "ratings": {"sagHfa": sag_hfa, "fpiHfa": 2.5, "sagThrough": sag_through},
-        "polls": fetch_polls(),
+        "polls": polls_with_fallback(),
         "conferences": confs, "teams": list(teams.values()),
         "games": sorted(games, key=lambda g: g["date"]),
     }
