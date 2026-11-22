@@ -648,14 +648,15 @@ function runSeason(mode, rng, w, trace, upto) {
   if (mode === 'sim') { SIMR = {}; FBS.forEach(i => SIMR[i] = R[i] + SIM_SD * gauss(rng)); }
   try { return seasonBody(mode, rng, w, trace, upto, AN); } finally { SIMR = null; }
 }
-// The season-end ranking starts from the latest real ranking (the newer of the CFP ranking and the AP poll), the
+// The season-end ranking starts from the latest real ranking (the committee's, or the AP poll before its first), the
 // way the committee only re-sorts teams on new results: each team starts at the model score of the spot it holds
 // there, then moves on its games since, with opponent strength half power rating and half rank in that ranking,
 // a champion's bonus, and no charge for losing a title game. Before the first poll, the model ranks from scratch.
 function latestRealPoll() {
   const newest = (kind, label) => { const arch = pollArchive(kind), d = Object.keys(arch).sort().pop(); return d ? { label, date: d, ...arch[d] } : null; };
-  const cfp = newest('cfp', 'CFP'), ap = newest('ap', 'AP');
-  return cfp && (!ap || cfp.date >= ap.date) ? cfp : ap;
+  // The committee's own latest ranking whenever one exists: rolled forward a week it matched the next release
+  // within 1.5 spots per team, closer than starting from a newer AP poll. The AP poll only before the first release.
+  return newest('cfp', 'CFP') || newest('ap', 'AP');
 }
 let ANCHOR_CACHE = null;
 function getAnchor(w) {
